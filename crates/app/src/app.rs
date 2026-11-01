@@ -68,6 +68,7 @@ pub struct App {
     pub group: usize,
     pub pad: usize,
     pub page: usize,
+    pub sub: usize,
     pub view: View,
     pub step: Option<usize>,
     pub step_mode: bool,
@@ -109,6 +110,7 @@ impl App {
             group: 0,
             pad: 0,
             page: 0,
+            sub: 0,
             view: View::Pad,
             step: None,
             step_mode: false,
@@ -495,7 +497,27 @@ impl App {
     }
 
     pub fn page_params(&self) -> [Param; 4] {
-        PAGES[self.page].1
+        if self.page == params::SYNTH_PAGE {
+            params::synth_page(self.current_pad().source, self.sub).1
+        } else {
+            PAGES[self.page].1
+        }
+    }
+
+    pub fn page_name(&self, page: usize) -> String {
+        if page == params::SYNTH_PAGE {
+            params::synth_page(self.current_pad().source, self.sub).0
+        } else {
+            PAGES[page].0.into()
+        }
+    }
+
+    pub fn open_page(&mut self, page: usize) {
+        if page == params::SYNTH_PAGE && self.page == page {
+            let count = params::synth_pages(self.current_pad().source);
+            self.sub = (self.sub + 1) % count;
+        }
+        self.page = page;
     }
 
     pub fn control(&mut self, cc: u8, value: u8) {

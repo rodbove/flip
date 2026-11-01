@@ -1,5 +1,5 @@
 use flip_engine::project::{Filter as FilterKind, LENGTHS, Mode as PlayMode, Wave};
-use flip_engine::{Pad, Step};
+use flip_engine::{Pad, Source as Engine, Step};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +36,22 @@ pub enum Param {
     Capture,
     Reverse,
     Source,
+    FmAlgo,
+    FmFeedback,
+    FmDepth,
+    FmTouch,
+    OpRatio(u8),
+    OpLevel(u8),
+    OpDecay(u8),
+    OpFine(u8),
+    Damping,
+    Brightness,
+    Body,
+    Bow,
+    MorphPos,
+    Spread,
+    Sub,
+    Drive,
 }
 
 pub enum Target {
@@ -69,6 +85,51 @@ const fn choice(name: &'static str, count: usize, default: f32) -> Spec {
         max: (count - 1) as f32,
         default,
         steps: Some(count),
+    }
+}
+
+pub const SYNTH_PAGE: usize = 3;
+pub const ENGINES: [&str; 5] = ["SAMPLE", "ANALOG", "FM", "STRING", "MORPH"];
+const WAVES: [&str; 4] = ["SINE", "TRI", "SAW", "SQR"];
+
+pub fn synth_pages(source: Engine) -> usize {
+    if source == Engine::Fm { 5 } else { 1 }
+}
+
+pub fn synth_page(source: Engine, sub: usize) -> (String, [Param; 4]) {
+    match source {
+        Engine::Fm => match sub % 5 {
+            0 => (
+                "FM".into(),
+                [
+                    Param::FmAlgo,
+                    Param::FmFeedback,
+                    Param::FmDepth,
+                    Param::FmTouch,
+                ],
+            ),
+            n => {
+                let k = (n - 1) as u8;
+                (
+                    format!("OP{n}"),
+                    [
+                        Param::OpRatio(k),
+                        Param::OpLevel(k),
+                        Param::OpDecay(k),
+                        Param::OpFine(k),
+                    ],
+                )
+            }
+        },
+        Engine::String => (
+            "STRING".into(),
+            [Param::Damping, Param::Brightness, Param::Body, Param::Bow],
+        ),
+        Engine::Morph => (
+            "MORPH".into(),
+            [Param::MorphPos, Param::Spread, Param::Sub, Param::Drive],
+        ),
+        Engine::Synth | Engine::Sample => (PAGES[SYNTH_PAGE].0.into(), PAGES[SYNTH_PAGE].1),
     }
 }
 
@@ -173,14 +234,31 @@ impl Param {
             Threshold => spec("THRESH", 0.0, 0.5, 0.05),
             Capture => choice("SOURCE", CAPTURES.len(), 0.0),
             Reverse => choice("REVERSE", 2, 0.0),
-            Source => choice("ENGINE", 2, 0.0),
+            Source => choice("ENGINE", ENGINES.len(), 0.0),
+            FmAlgo => choice("ALGO", flip_engine::ALGORITHMS, 0.0),
+            FmFeedback => spec("FEEDBACK", 0.0, 1.0, 0.0),
+            FmDepth => spec("DEPTH", 0.0, 4.0, 1.0),
+            FmTouch => spec("TOUCH", 0.0, 1.0, 0.5),
+            OpRatio(_) => spec("RATIO", 0.5, 16.0, 1.0),
+            OpLevel(_) => spec("LEVEL", 0.0, 1.0, 0.0),
+            OpDecay(_) => spec("DECAY", 0.01, 10.0, 1.0),
+            OpFine(_) => spec("FINE", -50.0, 50.0, 0.0),
+            Damping => spec("DAMP", 0.0, 1.0, 0.5),
+            Brightness => spec("BRIGHT", 0.0, 1.0, 0.6),
+            Body => spec("BODY", 0.0, 1.0, 0.3),
+            Bow => spec("BOW", 0.0, 1.0, 0.0),
+            MorphPos => spec("WAVE", 0.0, 3.0, 1.0),
+            Spread => spec("SPREAD", 0.0, 0.5, 0.1),
+            Sub => spec("SUB", 0.0, 1.0, 0.0),
+            Drive => spec("DRIVE", 0.0, 1.0, 0.0),
         }
     }
 
     pub fn curve(self) -> f32 {
         use Param::*;
         match self {
-            Attack | Decay | Release => 3.0,
+            Attack | Decay | Release | OpDecay(_) => 3.0,
+            OpRatio(_) => 2.0,
             _ => 1.0,
         }
     }
@@ -221,7 +299,23 @@ impl Param {
             Pan => p.pan,
             Sweep => p.synth.sweep,
             Reverse => p.reverse as u8 as f32,
-            Source => (p.source == flip_engine::Source::Synth) as u8 as f32,
+            Source => index(&Engine::ALL, p.source),
+            FmAlgo => p.fm.algorithm as f32,
+            FmFeedback => p.fm.feedback,
+            FmDepth => p.fm.depth,
+            FmTouch => p.fm.velocity,
+            OpRatio(k) => op(p, k).ratio,
+            OpLevel(k) => op(p, k).level,
+            OpDecay(k) => op(p, k).decay,
+            OpFine(k) => op(p, k).fine,
+            Damping => p.pluck.damping,
+            Brightness => p.pluck.brightness,
+            Body => p.pluck.body,
+            Bow => p.pluck.bow,
+            MorphPos => p.morph.position,
+            Spread => p.morph.spread,
+            Sub => p.morph.sub,
+            Drive => p.morph.drive,
             _ => 0.0,
         }
     }
@@ -251,13 +345,23 @@ impl Param {
             Pan => p.pan = v,
             Sweep => p.synth.sweep = v,
             Reverse => p.reverse = i > 0,
-            Source => {
-                p.source = if i > 0 {
-                    flip_engine::Source::Synth
-                } else {
-                    flip_engine::Source::Sample
-                }
-            }
+            Source => p.source = pick(&Engine::ALL, i),
+            FmAlgo => p.fm.algorithm = i.min(flip_engine::ALGORITHMS - 1) as u8,
+            FmFeedback => p.fm.feedback = v,
+            FmDepth => p.fm.depth = v,
+            FmTouch => p.fm.velocity = v,
+            OpRatio(k) => op_mut(p, k).ratio = ((v * 2.0).round() / 2.0).max(0.5),
+            OpLevel(k) => op_mut(p, k).level = v,
+            OpDecay(k) => op_mut(p, k).decay = v,
+            OpFine(k) => op_mut(p, k).fine = v,
+            Damping => p.pluck.damping = v,
+            Brightness => p.pluck.brightness = v,
+            Body => p.pluck.body = v,
+            Bow => p.pluck.bow = v,
+            MorphPos => p.morph.position = v,
+            Spread => p.morph.spread = v,
+            Sub => p.morph.sub = v,
+            Drive => p.morph.drive = v,
             _ => {}
         }
     }
@@ -285,7 +389,34 @@ impl Param {
         let i = v.round().max(0.0) as usize;
         match self {
             Start | End | Mix | Sustain | Chance | Velocity | Swing | GroupVolume | Master
-            | Cutoff | Resonance => format!("{:.0}%", v * 100.0),
+            | Cutoff | Resonance | FmFeedback | FmTouch | OpLevel(_) | Damping | Brightness
+            | Body | Bow | Sub | Drive => format!("{:.0}%", v * 100.0),
+            FmAlgo => format!("{}", i + 1),
+            FmDepth => format!("{v:.2}"),
+            OpRatio(_) => format!("{v:.1}x"),
+            OpDecay(_) => {
+                if v >= flip_engine::synth::fm::HOLD {
+                    "HOLD".into()
+                } else if v < 1.0 {
+                    format!("{:.0} ms", v * 1000.0)
+                } else {
+                    format!("{v:.2} s")
+                }
+            }
+            OpFine(_) => format!("{v:+.0} c"),
+            MorphPos => {
+                let at = v.clamp(0.0, 3.0);
+                let low = (at.floor() as usize).min(2);
+                let t = at - low as f32;
+                if t < 0.05 {
+                    WAVES[low].into()
+                } else if t > 0.95 {
+                    WAVES[low + 1].into()
+                } else {
+                    format!("{}>{}", WAVES[low], WAVES[low + 1])
+                }
+            }
+            Spread => format!("{v:.2} st"),
             Gain => format!("{:.0}%", v * 100.0),
             Pitch | StepPitch | Sweep => format!("{v:+.0} st"),
             Detune => format!("{v:+.2}"),
@@ -312,9 +443,17 @@ impl Param {
             Threshold => format!("{:.0}%", v * 200.0),
             Capture => CAPTURES[i.min(CAPTURES.len() - 1)].into(),
             Reverse => if i > 0 { "ON" } else { "OFF" }.into(),
-            Source => if i > 0 { "SYNTH" } else { "SAMPLE" }.into(),
+            Source => ENGINES[i.min(ENGINES.len() - 1)].into(),
         }
     }
+}
+
+fn op(p: &Pad, k: u8) -> &flip_engine::Op {
+    &p.fm.ops[(k as usize).min(flip_engine::OPERATORS - 1)]
+}
+
+fn op_mut(p: &mut Pad, k: u8) -> &mut flip_engine::Op {
+    &mut p.fm.ops[(k as usize).min(flip_engine::OPERATORS - 1)]
 }
 
 fn index<T: PartialEq + Copy>(all: &[T], v: T) -> f32 {
@@ -360,6 +499,33 @@ mod tests {
             assert_eq!(Param::WaveB.pad_get(&pad), 4.0);
             Param::Source.pad_set(&mut pad, 1.0);
             assert_eq!(pad.source, Source::Synth);
+            Param::Source.pad_set(&mut pad, 2.0);
+            assert_eq!(pad.source, Source::Fm);
+        }
+
+        #[test]
+        fn snaps_operator_ratios_to_halves() {
+            let mut pad = Pad::default();
+            Param::OpRatio(2).pad_set(&mut pad, 3.3);
+            assert_eq!(pad.fm.ops[2].ratio, 3.5);
+            Param::OpRatio(2).pad_set(&mut pad, 0.1);
+            assert_eq!(pad.fm.ops[2].ratio, 0.5);
+        }
+    }
+
+    mod when_showing_the_synth_page {
+        use super::*;
+
+        #[test]
+        fn follows_the_engine() {
+            assert_eq!(synth_page(Source::Synth, 0).1, PAGES[SYNTH_PAGE].1);
+            assert_eq!(synth_page(Source::String, 3).0, "STRING");
+            assert_eq!(synth_page(Source::Fm, 0).0, "FM");
+            let (name, params) = synth_page(Source::Fm, 2);
+            assert_eq!(name, "OP2");
+            assert_eq!(params[0], Param::OpRatio(1));
+            assert_eq!(synth_pages(Source::Fm), 5);
+            assert_eq!(synth_pages(Source::Morph), 1);
         }
     }
 }

@@ -4,7 +4,6 @@ use eframe::egui::{
     self, Align2, Color32, FontId, Id, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui,
     pos2, vec2,
 };
-use flip_engine::dsp;
 use flip_engine::{GROUPS, PADS, PATTERNS};
 
 use crate::app::{App, FLASH, Take, View};
@@ -312,7 +311,7 @@ fn pad_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         SCREEN_INK,
     );
     let detail = match (&pad.sample, pad.source) {
-        (_, flip_engine::Source::Synth) => "SYNTH".to_string(),
+        (_, src) if src.is_synth() => Param::Source.text(Param::Source.pad_get(&pad)),
         (Some(s), _) => format!(
             "{:.2}s  {}k{}",
             s.seconds() * (pad.end - pad.start).abs(),
@@ -347,7 +346,7 @@ fn pad_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         SCREEN_DIM,
     );
     match (&pad.sample, pad.source) {
-        (_, flip_engine::Source::Synth) => synth_view(&pad, ui, l, area),
+        (_, src) if src.is_synth() => synth_view(&pad, ui, l, area),
         (Some(s), _) => {
             wave_view(app, ui, l, area, &s.overview, pad.start, pad.end);
         }
@@ -362,7 +361,7 @@ fn pad_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
             painter.text(
                 area.center() + vec2(0.0, l.s(14.0)),
                 Align2::CENTER_CENTER,
-                "drop a file, LOAD, SAMPLE to record, or REC page ENGINE = SYNTH",
+                "drop a file, LOAD, SAMPLE to record, P for presets, or REC page ENGINE",
                 l.f(10.0),
                 SCREEN_DIM,
             );
@@ -440,15 +439,12 @@ fn synth_view(pad: &flip_engine::Pad, ui: &Ui, l: &L, area: Rect) {
     let painter = ui.painter();
     let left = Rect::from_min_max(area.min, pos2(area.center().x - l.s(10.0), area.max.y));
     let right = Rect::from_min_max(pos2(area.center().x + l.s(10.0), area.min.y), area.max);
-    let synth = &pad.synth;
-    let ratio = dsp::semis(synth.detune);
-    let n = 200;
-    let points: Vec<Pos2> = (0..=n)
-        .map(|i| {
-            let t = i as f32 / n as f32 * 2.0;
-            let a = dsp::shape(synth.wave_a, t.fract());
-            let b = dsp::shape(synth.wave_b, (t * ratio).fract());
-            let v = a * (1.0 - synth.mix) + b * synth.mix;
+    let wave = flip_engine::synth::preview(pad, 201);
+    let n = wave.len() - 1;
+    let points: Vec<Pos2> = wave
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
             pos2(
                 left.min.x + i as f32 / n as f32 * left.width(),
                 left.center().y - v * left.height() * 0.4,
@@ -484,14 +480,26 @@ fn synth_view(pad: &flip_engine::Pad, ui: &Ui, l: &L, area: Rect) {
     painter.text(
         left.left_top(),
         Align2::LEFT_TOP,
-        format!(
-            "{} + {}",
-            Param::WaveA.text(Param::WaveA.pad_get(pad)),
-            Param::WaveB.text(Param::WaveB.pad_get(pad))
-        ),
+        synth_caption(pad),
         l.f(9.0),
         SCREEN_DIM,
     );
+}
+
+fn synth_caption(pad: &flip_engine::Pad) -> String {
+    let show = |p: Param| p.text(p.pad_get(pad));
+    match pad.source {
+        flip_engine::Source::Fm => format!(
+            "ALGO {}  DEPTH {}",
+            show(Param::FmAlgo),
+            show(Param::FmDepth)
+        ),
+        flip_engine::Source::String => {
+            format!("DAMP {}  BOW {}", show(Param::Damping), show(Param::Bow))
+        }
+        flip_engine::Source::Morph => show(Param::MorphPos),
+        _ => format!("{} + {}", show(Param::WaveA), show(Param::WaveB)),
+    }
 }
 
 fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
@@ -864,10 +872,11 @@ fn knob(app: &mut App, ui: &Ui, l: &L, i: usize, param: Param, center: Pos2) {
 
 fn pages(app: &mut App, ui: &Ui, l: &L) {
     let w = (600.0 - 7.0 * 6.0) / 8.0;
-    for (i, (name, _)) in PAGES.iter().enumerate() {
+    for i in 0..PAGES.len() {
         let rect = l.r(40.0 + i as f32 * (w + 6.0), 526.0, w, 28.0);
-        if key(ui, l, ("page", i), rect, name, app.page == i, false).clicked() {
-            app.page = i;
+        let name = app.page_name(i);
+        if key(ui, l, ("page", i), rect, &name, app.page == i, false).clicked() {
+            app.open_page(i);
         }
     }
 }

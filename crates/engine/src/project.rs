@@ -15,6 +15,23 @@ pub enum Source {
     #[default]
     Sample,
     Synth,
+    Fm,
+    String,
+    Morph,
+}
+
+impl Source {
+    pub const ALL: [Source; 5] = [
+        Source::Sample,
+        Source::Synth,
+        Source::Fm,
+        Source::String,
+        Source::Morph,
+    ];
+
+    pub fn is_synth(self) -> bool {
+        self != Source::Sample
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -83,6 +100,102 @@ impl Default for Synth {
     }
 }
 
+pub const OPERATORS: usize = 4;
+pub const ALGORITHMS: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Op {
+    pub ratio: f32,
+    pub level: f32,
+    pub decay: f32,
+    pub fine: f32,
+}
+
+impl Default for Op {
+    fn default() -> Self {
+        Self {
+            ratio: 1.0,
+            level: 0.0,
+            decay: 1.0,
+            fine: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Fm {
+    pub ops: [Op; OPERATORS],
+    pub algorithm: u8,
+    pub feedback: f32,
+    pub depth: f32,
+    pub velocity: f32,
+}
+
+impl Default for Fm {
+    fn default() -> Self {
+        let op = |ratio, level, decay| Op {
+            ratio,
+            level,
+            decay,
+            fine: 0.0,
+        };
+        Self {
+            ops: [
+                op(1.0, 1.0, 10.0),
+                op(1.0, 0.6, 0.8),
+                Op::default(),
+                Op::default(),
+            ],
+            algorithm: 0,
+            feedback: 0.0,
+            depth: 1.0,
+            velocity: 0.5,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Pluck {
+    pub damping: f32,
+    pub brightness: f32,
+    pub body: f32,
+    pub bow: f32,
+}
+
+impl Default for Pluck {
+    fn default() -> Self {
+        Self {
+            damping: 0.5,
+            brightness: 0.6,
+            body: 0.3,
+            bow: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Morph {
+    pub position: f32,
+    pub spread: f32,
+    pub sub: f32,
+    pub drive: f32,
+}
+
+impl Default for Morph {
+    fn default() -> Self {
+        Self {
+            position: 1.0,
+            spread: 0.1,
+            sub: 0.0,
+            drive: 0.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Pad {
@@ -108,6 +221,9 @@ pub struct Pad {
     pub choke: u8,
     pub reverse: bool,
     pub synth: Synth,
+    pub fm: Fm,
+    pub pluck: Pluck,
+    pub morph: Morph,
 }
 
 impl Default for Pad {
@@ -134,6 +250,9 @@ impl Default for Pad {
             choke: 0,
             reverse: false,
             synth: Synth::default(),
+            fm: Fm::default(),
+            pluck: Pluck::default(),
+            morph: Morph::default(),
         }
     }
 }
@@ -149,6 +268,9 @@ impl Pad {
         }
         match (self.source, &self.sample) {
             (Source::Synth, _) => "synth".into(),
+            (Source::Fm, _) => "fm".into(),
+            (Source::String, _) => "string".into(),
+            (Source::Morph, _) => "morph".into(),
             (Source::Sample, Some(s)) => s.name.clone(),
             (Source::Sample, None) => String::new(),
         }
@@ -380,6 +502,15 @@ mod tests {
             assert_eq!(project.groups.len(), GROUPS);
             assert!(project.groups.iter().all(|g| g.pads.len() == PADS));
             assert!(project.groups.iter().all(|g| g.patterns.len() == PATTERNS));
+        }
+
+        #[test]
+        fn gives_old_synth_pads_default_engine_settings() {
+            let pad: Pad = serde_json::from_str(r#"{"source":"Synth","pitch":3.0}"#).unwrap();
+            assert_eq!(pad.source, Source::Synth);
+            assert_eq!(pad.pitch, 3.0);
+            assert_eq!(pad.fm, Fm::default());
+            assert_eq!(pad.pluck, Pluck::default());
         }
     }
 }

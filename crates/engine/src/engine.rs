@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
 use crate::project::{Filter, GROUPS, Mode, PADS, Pad, Pattern, Project, Source, Step};
 use crate::sample::Sample;
+use crate::synth::{fm, morph, string};
 
 const VOICES: usize = 48;
 const KILL: u32 = 96;
@@ -96,6 +97,9 @@ struct Voice {
     filters: [Svf; 2],
     coefs: Option<Coefs>,
     tick: u32,
+    fm: fm::State,
+    morph: morph::State,
+    string: string::State,
 }
 
 #[derive(Default)]
@@ -122,6 +126,7 @@ pub struct Engine {
     rate: f32,
     project: Box<Project>,
     voices: Vec<Voice>,
+    strings: Vec<Box<[f32]>>,
     rng: Rng,
     playing: bool,
     phase: f64,
@@ -147,6 +152,9 @@ impl Engine {
             rate: rate as f32,
             project: Box::new(project),
             voices: (0..VOICES).map(|_| Voice::default()).collect(),
+            strings: (0..VOICES)
+                .map(|_| vec![0.0; string::buffer_len(rate as f32)].into_boxed_slice())
+                .collect(),
             rng: Rng::default(),
             playing: false,
             phase: 0.0,
@@ -401,9 +409,10 @@ impl Engine {
             return;
         }
         let choke = p.choke;
-        let sample = match p.source {
+        let source = p.source;
+        let sample = match source {
             Source::Sample => p.sample.clone(),
-            Source::Synth => None,
+            _ => None,
         };
         let pos = match &sample {
             Some(s) => {
@@ -453,7 +462,21 @@ impl Engine {
             filters: [Svf::default(); 2],
             coefs: None,
             tick: 0,
+            fm: fm::State::start(),
+            morph: morph::State::start(),
+            string: string::State::default(),
         };
+        if source == Source::String {
+            let pad = &self.project.groups[group].pads[pad];
+            let hz = MIDDLE_C * dsp::semis(pad.pitch + note as f32);
+            self.voices[slot].string = string::start(
+                &pad.pluck,
+                &mut self.strings[slot],
+                hz,
+                self.rate,
+                &mut self.rng,
+            );
+        }
     }
 
     fn note_off(&mut self, group: usize, pad: usize, note: i8) {
@@ -554,8 +577,7 @@ impl Engine {
             sustain: pad.sustain,
             release: pad.release,
         };
-        if pad.source == Source::Synth && pad.mode == Mode::OneShot && v.env.stage == Stage::Sustain
-        {
+        if pad.source.is_synth() && pad.mode == Mode::OneShot && v.env.stage == Stage::Sustain {
             v.env.release();
         }
         let level = v.env.next(&shape, dt);
@@ -590,22 +612,27 @@ impl Engine {
                 }
                 value
             }
-            (_, Source::Synth) => {
+            (_, Source::Sample) => return None,
+            (_, source) => {
                 let synth = &pad.synth;
                 let sweep_time = (pad.decay * SWEEP_SHARE).max(SWEEP_MIN);
                 v.sweep *= (-dt / sweep_time).exp();
                 let hz = MIDDLE_C * dsp::semis(tune + synth.sweep * v.sweep);
-                let dt_a = (hz / rate).min(0.5);
-                let dt_b = (hz * dsp::semis(synth.detune) / rate).min(0.5);
-                let a = dsp::osc(synth.wave_a, v.phase_a, dt_a, &mut self.rng);
-                let b = dsp::osc(synth.wave_b, v.phase_b, dt_b, &mut self.rng);
-                v.phase_a = (v.phase_a + dt_a).fract();
-                v.phase_b = (v.phase_b + dt_b).fract();
-                let s = (a * (1.0 - synth.mix) + b * synth.mix) * 0.5;
-                [s, s]
+                let s = match source {
+                    Source::Fm => fm::next(&pad.fm, &mut v.fm, hz, v.velocity, dt),
+                    Source::Morph => morph::next(&pad.morph, &mut v.morph, hz, rate, &mut self.rng),
+                    Source::String => string::next(
+                        &pad.pluck,
+                        &mut self.strings[i],
+                        &mut v.string,
+                        &mut self.rng,
+                    ),
+                    _ => analog(synth, v, hz, rate, &mut self.rng),
+                };
+                [s * 0.5, s * 0.5]
             }
-            _ => return None,
         };
+
         let bypass = pad.filter == Filter::Low && pad.cutoff >= 1.0 && pad.env_amount <= 0.0;
         let mut s = raw;
         if !bypass {
@@ -636,6 +663,16 @@ impl Engine {
     pub fn playing(&self) -> bool {
         self.playing
     }
+}
+
+fn analog(synth: &crate::project::Synth, v: &mut Voice, hz: f32, rate: f32, rng: &mut Rng) -> f32 {
+    let dt_a = (hz / rate).min(0.5);
+    let dt_b = (hz * dsp::semis(synth.detune) / rate).min(0.5);
+    let a = dsp::osc(synth.wave_a, v.phase_a, dt_a, rng);
+    let b = dsp::osc(synth.wave_b, v.phase_b, dt_b, rng);
+    v.phase_a = (v.phase_a + dt_a).fract();
+    v.phase_b = (v.phase_b + dt_b).fract();
+    a * (1.0 - synth.mix) + b * synth.mix
 }
 
 fn soft(x: f32) -> f32 {
@@ -749,6 +786,58 @@ mod tests {
             });
             run(&mut e, RATE as usize);
             assert_eq!(e.report().voices, 0);
+        }
+    }
+
+    mod when_a_synth_engine_plays {
+        use super::*;
+
+        fn with_engine(source: Source) -> Engine {
+            let mut project = Project::default();
+            let pad = &mut project.groups[0].pads[0];
+            pad.source = source;
+            pad.mode = Mode::Gate;
+            pad.sustain = 1.0;
+            pad.release = 0.05;
+            Engine::new(project, RATE)
+        }
+
+        fn note(e: &mut Engine, on: bool) {
+            e.handle(Command::Note {
+                group: 0,
+                pad: 0,
+                note: 0,
+                velocity: 1.0,
+                on,
+            });
+        }
+
+        #[test]
+        fn each_engine_sounds_and_stops_after_release() {
+            for source in [Source::Synth, Source::Fm, Source::String, Source::Morph] {
+                let mut e = with_engine(source);
+                note(&mut e, true);
+                assert!(loud(&run(&mut e, 4800)) > 0.05, "{source:?}");
+                note(&mut e, false);
+                run(&mut e, RATE as usize);
+                assert_eq!(e.report().voices, 0, "{source:?}");
+            }
+        }
+
+        #[test]
+        fn plays_chords_on_one_pad() {
+            let mut e = with_engine(Source::Fm);
+            for n in [0, 4, 7] {
+                e.handle(Command::Note {
+                    group: 0,
+                    pad: 0,
+                    note: n,
+                    velocity: 1.0,
+                    on: true,
+                });
+            }
+            run(&mut e, 480);
+            assert_eq!(e.report().voices, 3);
         }
     }
 
