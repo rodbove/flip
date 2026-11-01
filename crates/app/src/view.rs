@@ -8,7 +8,7 @@ use flip_engine::dsp;
 use flip_engine::{GROUPS, PADS, PATTERNS};
 
 use crate::app::{App, FLASH, Take, View};
-use crate::keys::{HELP, PAD_LABELS};
+use crate::keys::{HELP, PAD_KEYS};
 use crate::params::{PAGES, Param};
 use crate::theme::*;
 
@@ -950,7 +950,8 @@ fn pads(app: &mut App, ui: &Ui, l: &L) {
     let shift = ui.input(|i| i.modifiers.shift);
     let playing_here = app.report.playing && app.report.current[g] == index;
     let now_step = (app.report.pos[g] + length - 1) % length;
-    for (i, key_label) in PAD_LABELS.iter().enumerate() {
+    for (i, code) in PAD_KEYS.iter().enumerate() {
+        let key_label = app.key_label(*code);
         let (row, col) = (i / 4, i % 4);
         let rect = l.r(
             674.0 + col as f32 * 98.0,
@@ -1034,7 +1035,7 @@ fn pads(app: &mut App, ui: &Ui, l: &L) {
             painter.text(
                 face_rect.right_top() + vec2(-l.s(8.0), l.s(7.0)),
                 Align2::RIGHT_TOP,
-                *key_label,
+                key_label,
                 l.f(10.0),
                 DIM_INK,
             );

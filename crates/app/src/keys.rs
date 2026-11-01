@@ -23,10 +23,6 @@ pub const PAD_KEYS: [Key; 16] = [
     Key::V,
 ];
 
-pub const PAD_LABELS: [&str; 16] = [
-    "1", "2", "3", "4", "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V",
-];
-
 const PIANO: [(Key, i8); 13] = [
     (Key::A, 0),
     (Key::W, 1),
@@ -44,7 +40,7 @@ const PIANO: [(Key, i8); 13] = [
 ];
 
 pub const HELP: &[(&str, &str)] = &[
-    ("1-4 Q-R A-F Z-V", "play pads"),
+    ("4x4 left block", "play pads"),
     ("SHIFT + pad", "select pad, no sound"),
     ("TAB", "keys mode (piano)"),
     ("A W S E ... K", "piano keys"),
@@ -81,6 +77,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     for event in events {
         let egui::Event::Key {
             key,
+            physical_key,
             pressed,
             repeat,
             modifiers,
@@ -89,10 +86,14 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         else {
             continue;
         };
+        let code = physical_key.unwrap_or(key);
+        if pressed && physical_key.is_some() {
+            app.label(code, key);
+        }
         if !pressed {
             let mut i = 0;
             while i < app.held.len() {
-                if app.held[i].0 == key {
+                if app.held[i].0 == code {
                     let (_, g, p, n) = app.held.remove(i);
                     app.lift(g, p, n, false);
                 } else {
@@ -115,21 +116,21 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             }
             continue;
         }
-        if app.keys && matches!(key, Key::Z | Key::X) {
-            app.octave = (app.octave + if key == Key::Z { -1 } else { 1 }).clamp(-4, 4);
+        if app.keys && matches!(code, Key::Z | Key::X) {
+            app.octave = (app.octave + if code == Key::Z { -1 } else { 1 }).clamp(-4, 4);
             app.say(format!("octave {:+}", app.octave));
             continue;
         }
-        if let Some((g, p, n)) = note_for(app, key) {
+        if let Some((g, p, n)) = note_for(app, code) {
             if modifiers.shift && !app.keys {
                 app.select_pad(p);
             } else {
                 app.press(g, p, n, VELOCITY, false);
-                app.held.push((key, g, p, n));
+                app.held.push((code, g, p, n));
             }
             continue;
         }
-        match key {
+        match code {
             Key::Space => app.toggle_play(),
             Key::Enter => {
                 app.rec_seq = !app.rec_seq;

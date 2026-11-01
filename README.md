@@ -33,6 +33,10 @@ On macOS, build an app bundle to use the microphone:
 
 ## Controls
 
+Read `docs/tutorial.html` for a short tutorial.
+
+The keys work by position, so all keyboard layouts use the same keys. The table names the keys by their place on a QWERTY keyboard. After you press a pad key one time, the pad shows the letter of your layout.
+
 | Key | Action |
 | --- | --- |
 | 1-4, Q-R, A-F, Z-V | Play pads |

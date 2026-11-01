@@ -11,6 +11,7 @@ pub struct Settings {
     pub input: Option<String>,
     pub midi: Option<String>,
     pub learned: Vec<(u8, Param)>,
+    pub labels: Vec<(String, String)>,
     pub last: Option<PathBuf>,
     pub threshold: f32,
 }
@@ -22,6 +23,7 @@ impl Default for Settings {
             input: None,
             midi: None,
             learned: Vec::new(),
+            labels: Vec::new(),
             last: None,
             threshold: 0.05,
         }

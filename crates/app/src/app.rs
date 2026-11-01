@@ -258,6 +258,24 @@ impl App {
         }
     }
 
+    pub fn label(&mut self, code: egui::Key, key: egui::Key) {
+        let (code, key) = (code.name().to_string(), key.symbol_or_name().to_string());
+        match self.settings.labels.iter_mut().find(|(c, _)| *c == code) {
+            Some((_, k)) if *k == key => {}
+            Some((_, k)) => *k = key,
+            None => self.settings.labels.push((code, key)),
+        }
+    }
+
+    pub fn key_label(&self, code: egui::Key) -> String {
+        self.settings
+            .labels
+            .iter()
+            .find(|(c, _)| c == code.name())
+            .map(|(_, k)| k.clone())
+            .unwrap_or_else(|| code.symbol_or_name().to_string())
+    }
+
     pub fn current_pad(&self) -> &Pad {
         &self.project.groups[self.group].pads[self.pad]
     }
