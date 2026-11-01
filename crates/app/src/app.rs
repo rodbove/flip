@@ -664,7 +664,7 @@ impl App {
     pub fn param(&self, p: Param) -> Option<f32> {
         let pad = self.current_pad();
         match p.target() {
-            Target::Pad => Some(p.pad_get(pad)),
+            Target::Pad => p.applies(pad).then(|| p.pad_get(pad)),
             Target::Step => {
                 let step = self.step?;
                 let s = self.project.pattern(self.group).step(self.pad, step);
@@ -884,12 +884,17 @@ impl App {
         let seconds = s.seconds();
         let name = s.name.clone();
         let p = &mut self.project.groups[group].pads[pad];
-        p.sample = Some(Arc::new(s));
-        p.name.clear();
-        p.source = Source::Sample;
-        p.start = 0.0;
-        p.end = 1.0;
-        p.reverse = false;
+        *p = Pad {
+            sample: Some(Arc::new(s)),
+            source: Source::Sample,
+            gain: p.gain,
+            pan: p.pan,
+            choke: p.choke,
+            ..Pad::default()
+        };
+        if self.page == params::REC_PAGE {
+            self.page = 0;
+        }
         self.sync_pad(group, pad);
         self.say(format!(
             "{name} ({seconds:.1}s) -> {}",

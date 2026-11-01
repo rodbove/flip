@@ -643,6 +643,13 @@ impl Engine {
                 let value = s.read(v.pos);
                 let step = s.rate as f64 / rate as f64 * dsp::semis(tune) as f64;
                 let span = b - a;
+                let left = if pad.reverse { v.pos - a } else { b - v.pos };
+                if pad.mode == Mode::OneShot
+                    && v.env.stage != Stage::Release
+                    && left / step < (pad.release * rate) as f64
+                {
+                    v.env.release();
+                }
                 if pad.reverse {
                     v.pos -= step;
                     if v.pos < a {
@@ -949,6 +956,17 @@ mod tests {
             let mut out = vec![[0.0; 2]; 9600];
             e.render(&mut out, &mut |_| {});
             assert!(e.take_trash().any(|t| matches!(t, Trash::Sample(_))));
+        }
+
+        #[test]
+        fn fades_out_over_the_release() {
+            let mut e = with_sample(Mode::OneShot);
+            e.project.groups[0].pads[0].release = 0.05;
+            hit(&mut e, true);
+            let out = run(&mut e, 4800);
+            let early = out[4800 - 2400 - 1][0];
+            let late = out[4800 - 300][0];
+            assert!(late < early * 0.5, "{late} vs {early}");
         }
 
         #[test]

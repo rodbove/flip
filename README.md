@@ -37,7 +37,7 @@ On macOS, build an app bundle to use the microphone:
 
 ## Controls
 
-Read `docs/tutorial.html` for a short tutorial.
+Read the tutorial at https://rodbove.github.io/flip/ (source: `docs/tutorial.html`).
 
 The keys work by position, so all keyboard layouts use the same keys. The table names the keys by their place on a QWERTY keyboard. After you press a pad key one time, the pad shows the letter of your layout.
 

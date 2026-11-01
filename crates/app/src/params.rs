@@ -54,6 +54,22 @@ pub enum Param {
     Drive,
 }
 
+impl Param {
+    pub fn applies(self, pad: &Pad) -> bool {
+        use Param::*;
+        match self {
+            Start | End | Reverse => pad.source == Engine::Sample,
+            WaveA | WaveB | Detune | Mix => pad.source == Engine::Synth,
+            Sweep => pad.source != Engine::Sample,
+            FmAlgo | FmFeedback | FmDepth | FmTouch | OpRatio(_) | OpLevel(_) | OpDecay(_)
+            | OpFine(_) => pad.source == Engine::Fm,
+            Damping | Brightness | Body | Bow => pad.source == Engine::String,
+            MorphPos | Spread | Sub | Drive => pad.source == Engine::Morph,
+            _ => true,
+        }
+    }
+}
+
 pub enum Target {
     Pad,
     Step,
@@ -89,6 +105,7 @@ const fn choice(name: &'static str, count: usize, default: f32) -> Spec {
 }
 
 pub const SYNTH_PAGE: usize = 3;
+pub const REC_PAGE: usize = 7;
 pub const ENGINES: [&str; 5] = ["SAMPLE", "ANALOG", "FM", "STRING", "MORPH"];
 const WAVES: [&str; 4] = ["SINE", "TRI", "SAW", "SQR"];
 
@@ -129,7 +146,11 @@ pub fn synth_page(source: Engine, sub: usize) -> (String, [Param; 4]) {
             "MORPH".into(),
             [Param::MorphPos, Param::Spread, Param::Sub, Param::Drive],
         ),
-        Engine::Synth | Engine::Sample => (PAGES[SYNTH_PAGE].0.into(), PAGES[SYNTH_PAGE].1),
+        Engine::Sample => (
+            "SAMPLE".into(),
+            [Param::Start, Param::End, Param::Reverse, Param::Mode],
+        ),
+        Engine::Synth => (PAGES[SYNTH_PAGE].0.into(), PAGES[SYNTH_PAGE].1),
     }
 }
 
@@ -489,6 +510,21 @@ mod tests {
         fn snaps_choices_to_whole_values() {
             assert_eq!(Param::WaveA.value_at(0.6), 2.0);
             assert_eq!(Param::Mode.value_at(1.0), 2.0);
+        }
+
+        #[test]
+        fn skips_controls_that_do_not_touch_the_sound() {
+            let sample = Pad::default();
+            assert!(Param::Start.applies(&sample));
+            assert!(!Param::WaveA.applies(&sample));
+            assert!(!Param::Damping.applies(&sample));
+            let synth = Pad {
+                source: Engine::Synth,
+                ..Pad::default()
+            };
+            assert!(!Param::Start.applies(&synth));
+            assert!(Param::WaveA.applies(&synth));
+            assert!(Param::Pitch.applies(&synth));
         }
 
         #[test]
