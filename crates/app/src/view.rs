@@ -13,6 +13,8 @@ use crate::theme::*;
 
 const W: f32 = 1100.0;
 const H: f32 = 700.0;
+const MIN_WIDTH: f32 = 550.0;
+const MAX_WIDTH: f32 = 2600.0;
 const DRAG_RANGE: f32 = 160.0;
 const FINE: f32 = 6.0;
 const SCROLL_RANGE: f32 = 800.0;
@@ -241,11 +243,14 @@ fn controls(ui: &Ui, l: &L) {
     }
     let grip = l.r(1050.0, 650.0, 30.0, 30.0);
     let resp = ui.interact(grip, Id::unique("grip"), Sense::drag());
-    if resp.drag_started() {
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::BeginResize(
-                egui::viewport::ResizeDirection::SouthEast,
-            ));
+    if resp.dragged() {
+        let ctx = ui.ctx();
+        if let Some(inner) = ctx.input(|i| i.viewport().inner_rect) {
+            let d = resp.drag_delta();
+            let grow = (d.x / W).max(d.y / H);
+            let width = (inner.width() + grow * W).clamp(MIN_WIDTH, MAX_WIDTH);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(width, width * H / W)));
+        }
     }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
