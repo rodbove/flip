@@ -49,6 +49,7 @@ The keys work by position, so all keyboard layouts use the same keys. The table 
 | Enter | Record pad hits into the pattern |
 | B | Start or stop a sample recording |
 | M | Metronome |
+| T or TEMPO | Type a BPM, then press again to set it |
 | [ / ] | Previous / next pattern |
 | Left / Right | Previous / next group |
 | Up / Down | Tempo |

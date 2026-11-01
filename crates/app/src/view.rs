@@ -113,6 +113,7 @@ pub fn draw(app: &mut App, ui: &mut Ui) {
     pages(app, ui, &l);
     functions(app, ui, &l);
     groups(app, ui, &l);
+    fader(app, ui, &l);
     pads(app, ui, &l);
     patterns(app, ui, &l);
     footer(app, ui, &l);
@@ -128,19 +129,26 @@ fn header(app: &mut App, ui: &Ui, l: &L) {
         INK,
     );
     painter.text(
-        l.p(118.0, 50.0),
+        l.p(42.0, 82.0),
         Align2::LEFT_CENTER,
-        "PAD SAMPLER",
-        l.f(10.0),
-        INK,
-    );
-    painter.text(
-        l.p(118.0, 64.0),
-        Align2::LEFT_CENTER,
-        "F-1  4 x 16  64 STEP",
-        l.f(10.0),
+        "PAD SAMPLER F-1",
+        l.f(8.0),
         DIM_INK,
     );
+    for row in 0..5 {
+        for col in 0..11 {
+            let c = l.p(132.0 + col as f32 * 9.0, 38.0 + row as f32 * 9.0);
+            painter.circle_filled(c, l.s(2.2), GRILLE);
+        }
+    }
+    lcd(app, ui, l, l.r(242.0, 30.0, 220.0, 54.0));
+    let tap = l.r(472.0, 38.0, 74.0, 38.0);
+    let blink = (app.now * 3.0).fract() < 0.5;
+    let typing = app.tempo_entry.is_some() && blink;
+    if key(ui, l, "tempo", tap, "TEMPO", typing, true).clicked() {
+        app.tempo_key();
+        app.page = TEMPO_PAGE;
+    }
     let buttons = ["NEW", "OPEN", "SAVE", "EXPORT", "UNDO", "SETUP"];
     let w = (382.0 - 5.0 * 6.0) / 6.0;
     for (i, name) in buttons.iter().enumerate() {
@@ -160,6 +168,147 @@ fn header(app: &mut App, ui: &Ui, l: &L) {
             }
         }
     }
+}
+
+const SEGMENTS: [u8; 10] = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f];
+const TEMPO_PAGE: usize = 6;
+
+fn digits(painter: &egui::Painter, origin: Pos2, h: f32, text: &str, on: Color32, off: Color32) {
+    let w = h * 0.52;
+    let t = h * 0.11;
+    let half = h / 2.0;
+    let mut x = origin.x;
+    for ch in text.chars() {
+        if ch == '.' {
+            painter.rect_filled(
+                Rect::from_min_size(pos2(x - t * 2.0, origin.y + h - t), vec2(t, t)),
+                0.0,
+                on,
+            );
+            continue;
+        }
+        let mask = match ch {
+            '_' => 0x08,
+            '-' => 0x40,
+            _ => ch.to_digit(10).map(|d| SEGMENTS[d as usize]).unwrap_or(0),
+        };
+        let y = origin.y;
+        let bars = [
+            Rect::from_min_size(pos2(x + t, y), vec2(w - 2.0 * t, t)),
+            Rect::from_min_size(pos2(x + w - t, y + t), vec2(t, half - 1.5 * t)),
+            Rect::from_min_size(pos2(x + w - t, y + half + t * 0.5), vec2(t, half - 1.5 * t)),
+            Rect::from_min_size(pos2(x + t, y + h - t), vec2(w - 2.0 * t, t)),
+            Rect::from_min_size(pos2(x, y + half + t * 0.5), vec2(t, half - 1.5 * t)),
+            Rect::from_min_size(pos2(x, y + t), vec2(t, half - 1.5 * t)),
+            Rect::from_min_size(pos2(x + t, y + half - t * 0.5), vec2(w - 2.0 * t, t)),
+        ];
+        for (i, bar) in bars.iter().enumerate() {
+            let lit = mask & (1 << i) != 0;
+            painter.rect_filled(*bar, t * 0.3, if lit { on } else { off });
+        }
+        x += w + t * 3.0;
+    }
+}
+
+fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
+    let painter = ui.painter();
+    painter.rect_filled(rect.expand(l.s(3.0)), l.s(8.0), KEY);
+    painter.rect_filled(rect, l.s(5.0), SCREEN);
+    let tempo = match &app.tempo_entry {
+        Some(text) => {
+            let count = text.chars().filter(|c| c.is_ascii_digit()).count();
+            let cursor = if (app.now * 3.0).fract() < 0.5 {
+                "_"
+            } else {
+                " "
+            };
+            let cursor = if count < 4 && !text.contains('.') || count < 4 && text.ends_with('.') {
+                cursor
+            } else {
+                ""
+            };
+            let used = count + cursor.len();
+            format!("{}{text}{cursor}", " ".repeat(4usize.saturating_sub(used)))
+        }
+        None => format!("{:05.1}", app.project.tempo.clamp(0.0, 999.9)),
+    };
+    digits(
+        painter,
+        rect.min + vec2(l.s(12.0), l.s(10.0)),
+        l.s(32.0),
+        &tempo,
+        ORANGE,
+        LCD_OFF,
+    );
+    let side = rect.min.x + l.s(150.0);
+    painter.text(
+        pos2(side, rect.min.y + l.s(12.0)),
+        Align2::LEFT_CENTER,
+        "BPM",
+        l.f(9.0),
+        ORANGE,
+    );
+    painter.text(
+        pos2(side, rect.min.y + l.s(27.0)),
+        Align2::LEFT_CENTER,
+        format!(
+            "{}{:02}",
+            (b'A' + app.group as u8) as char,
+            app.editing() + 1
+        ),
+        l.f(9.0),
+        SCREEN_INK,
+    );
+    let beat = (app.report.phase as usize / 4) % 4;
+    for b in 0..4 {
+        let lit = app.report.playing && b == beat;
+        painter.circle_filled(
+            pos2(side + l.s(3.0 + b as f32 * 12.0), rect.min.y + l.s(42.0)),
+            l.s(3.0),
+            if lit { ORANGE } else { LCD_OFF },
+        );
+    }
+}
+
+fn fader(app: &mut App, ui: &Ui, l: &L) {
+    let track = l.r(651.0, 150.0, 14.0, 382.0);
+    let g = app.group;
+    let resp = ui.interact(
+        track.expand(l.s(6.0)),
+        Id::unique("fader"),
+        Sense::click_and_drag(),
+    );
+    if (resp.dragged() || resp.clicked())
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let v = 1.0 - ((p.y - track.min.y) / track.height()).clamp(0.0, 1.0);
+        app.set_param(Param::GroupVolume, v);
+    }
+    let painter = ui.painter();
+    painter.rect_filled(track, l.s(7.0), KEY_SHADOW);
+    let v = app.project.groups[g].volume.clamp(0.0, 1.0);
+    let cap_h = l.s(26.0);
+    let y = track.max.y - v * (track.height() - cap_h) - cap_h;
+    let cap = Rect::from_min_size(
+        pos2(track.min.x - l.s(4.0), y),
+        vec2(track.width() + l.s(8.0), cap_h),
+    );
+    painter.rect_filled(cap.translate(vec2(0.0, l.s(3.0))), l.s(4.0), PAD_SHADOW);
+    painter.rect_filled(cap, l.s(4.0), PAD);
+    painter.line_segment(
+        [
+            pos2(cap.min.x + l.s(3.0), cap.center().y),
+            pos2(cap.max.x - l.s(3.0), cap.center().y),
+        ],
+        Stroke::new(l.s(2.0), ORANGE),
+    );
+    painter.text(
+        pos2(track.center().x, track.max.y + l.s(10.0)),
+        Align2::CENTER_CENTER,
+        "VOL",
+        l.f(8.0),
+        DIM_INK,
+    );
 }
 
 fn screen(app: &mut App, ui: &Ui, l: &L) {
@@ -1021,7 +1170,39 @@ fn functions(app: &mut App, ui: &Ui, l: &L) {
             },
             _ => false,
         };
-        if key(ui, l, ("fn", i), rect, name, lit, true).clicked() {
+        let label = if i < 2 { "" } else { *name };
+        let resp = key(ui, l, ("fn", i), rect, label, lit, true);
+        if i < 2 {
+            let shift = if resp.is_pointer_button_down_on() {
+                l.s(2.0)
+            } else {
+                0.0
+            };
+            let c = rect.center() + vec2(0.0, shift - l.s(6.0));
+            let size = l.s(8.0);
+            let painter = ui.painter();
+            if i == 0 {
+                painter.add(Shape::convex_polygon(
+                    vec![
+                        c + vec2(-size * 0.7, -size),
+                        c + vec2(size, 0.0),
+                        c + vec2(-size * 0.7, size),
+                    ],
+                    KEY_INK,
+                    Stroke::NONE,
+                ));
+            } else {
+                painter.circle_filled(c, size * 0.9, ORANGE);
+            }
+            painter.text(
+                c + vec2(0.0, l.s(18.0)),
+                Align2::CENTER_CENTER,
+                *name,
+                l.f(9.0),
+                KEY_INK,
+            );
+        }
+        if resp.clicked() {
             match i {
                 0 => app.toggle_play(),
                 1 => app.toggle_rec(),

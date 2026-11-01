@@ -51,6 +51,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("9 / 0", "record grid / quantize notes"),
     ("B", "sample (again: stop)"),
     ("M", "metronome"),
+    ("T / TEMPO", "type bpm, T again to set"),
     ("[ ]", "pattern -/+"),
     ("LEFT / RIGHT", "group -/+"),
     ("UP / DOWN", "tempo -/+"),
@@ -61,6 +62,23 @@ pub const HELP: &[(&str, &str)] = &[
     ("ESC", "cancel / close"),
     ("/", "this help"),
 ];
+
+fn digit(key: Key) -> Option<char> {
+    let all = [
+        Key::Num0,
+        Key::Num1,
+        Key::Num2,
+        Key::Num3,
+        Key::Num4,
+        Key::Num5,
+        Key::Num6,
+        Key::Num7,
+        Key::Num8,
+        Key::Num9,
+    ];
+    let n = all.iter().position(|k| *k == key)?;
+    char::from_digit(n as u32, 10)
+}
 
 fn note_for(app: &App, key: Key) -> Option<(usize, usize, i8)> {
     if app.keys {
@@ -106,6 +124,20 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             continue;
         }
         if repeat {
+            continue;
+        }
+        if app.tempo_entry.is_some() {
+            match code {
+                Key::Enter | Key::T => app.tempo_key(),
+                Key::Escape => app.tempo_cancel(),
+                Key::Backspace | Key::Delete => app.tempo_back(),
+                Key::Period | Key::Comma => app.tempo_type('.'),
+                _ => {
+                    if let Some(d) = digit(code) {
+                        app.tempo_type(d);
+                    }
+                }
+            }
             continue;
         }
         if modifiers.command {
@@ -167,6 +199,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             Key::Space => app.toggle_play(),
             Key::Enter => app.toggle_rec(),
             Key::B => app.arm(),
+            Key::T => app.tempo_key(),
             Key::M => app.toggle_metronome(),
             Key::Tab => {
                 let on = !app.keys;

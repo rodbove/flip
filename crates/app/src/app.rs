@@ -18,6 +18,7 @@ use crate::record;
 use crate::settings::Settings;
 
 const UNDO: usize = 50;
+const TEMPO_DIGITS: usize = 3;
 const PREROLL: f32 = 0.02;
 const MAX_TAKE: f32 = 120.0;
 const TAP_FLOOR: f32 = 1e-4;
@@ -122,6 +123,7 @@ pub struct App {
     pub now: f64,
     pub meter: [f32; 2],
     pub drag: Option<(usize, f32)>,
+    pub tempo_entry: Option<String>,
     pub lists: Option<(Vec<String>, Vec<String>, Vec<String>)>,
     pub ctx: egui::Context,
     title: String,
@@ -171,6 +173,7 @@ impl App {
             now: 0.0,
             meter: [0.0; 2],
             drag: None,
+            tempo_entry: None,
             lists: None,
             ctx,
             title: String::new(),
@@ -347,6 +350,42 @@ impl App {
         let on = !self.report.playing;
         self.send(Command::Play(on));
         self.report.playing = on;
+    }
+
+    pub fn tempo_key(&mut self) {
+        match self.tempo_entry.take() {
+            None => {
+                self.tempo_entry = Some(String::new());
+                self.say("type bpm, then TEMPO again");
+            }
+            Some(text) => match text.parse::<f32>() {
+                Ok(bpm) if bpm > 0.0 => {
+                    self.set_param(Param::Tempo, bpm.clamp(40.0, 240.0));
+                    self.say(format!("tempo {:.1}", self.project.tempo));
+                }
+                _ => self.say("tempo unchanged"),
+            },
+        }
+    }
+
+    pub fn tempo_type(&mut self, c: char) {
+        if let Some(text) = self.tempo_entry.as_mut()
+            && tempo_accepts(text, c)
+        {
+            text.push(c);
+        }
+    }
+
+    pub fn tempo_back(&mut self) {
+        if let Some(text) = self.tempo_entry.as_mut() {
+            text.pop();
+        }
+    }
+
+    pub fn tempo_cancel(&mut self) {
+        if self.tempo_entry.take().is_some() {
+            self.say("tempo unchanged");
+        }
     }
 
     pub fn toggle_metronome(&mut self) {
@@ -1094,9 +1133,45 @@ impl App {
     }
 }
 
+pub fn tempo_accepts(text: &str, c: char) -> bool {
+    let (whole, decimals) = match text.split_once('.') {
+        Some((w, d)) => (w.len(), Some(d.len())),
+        None => (text.len(), None),
+    };
+    match (c, decimals) {
+        ('.', None) => true,
+        ('.', Some(_)) => false,
+        (_, None) => whole < TEMPO_DIGITS,
+        (_, Some(d)) => d < 1,
+    }
+}
+
 pub fn file_name(p: &Path) -> String {
     p.file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("?")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod when_typing_a_tempo {
+        use super::*;
+
+        #[test]
+        fn takes_up_to_three_whole_digits() {
+            assert!(tempo_accepts("12", '8'));
+            assert!(!tempo_accepts("128", '0'));
+        }
+
+        #[test]
+        fn takes_one_decimal_digit() {
+            assert!(tempo_accepts("128", '.'));
+            assert!(tempo_accepts("128.", '5'));
+            assert!(!tempo_accepts("128.5", '0'));
+            assert!(!tempo_accepts("12.", '.'));
+        }
+    }
 }
