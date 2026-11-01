@@ -74,6 +74,7 @@ fn key(
         face
     };
     painter.rect_filled(face_rect, radius, face);
+    bevel(painter, face_rect, radius, !dark);
     if lit {
         painter.circle_filled(
             face_rect.left_top() + vec2(l.s(8.0), l.s(8.0)),
@@ -93,21 +94,17 @@ fn key(
 
 pub fn draw(app: &mut App, ui: &mut Ui) {
     let full = ui.max_rect();
-    ui.painter().rect_filled(full, 0.0, BACKDROP);
     let k = (full.width() / W).min(full.height() / H);
     let o = full.center() - vec2(W * k / 2.0, H * k / 2.0);
     let l = L { o, k };
     let body = l.r(10.0, 10.0, 1080.0, 680.0);
-    ui.painter()
-        .rect_filled(body.translate(vec2(0.0, l.s(4.0))), l.s(20.0), KEY_SHADOW);
-    ui.painter().rect_filled(body, l.s(20.0), BODY);
-    ui.painter().rect_stroke(
-        body,
-        l.s(20.0),
-        Stroke::new(l.s(1.0), BODY_EDGE),
-        StrokeKind::Inside,
-    );
+    let grab = ui.interact(body, Id::unique("body"), Sense::click_and_drag());
+    if grab.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    chassis(ui, &l, body);
     header(app, ui, &l);
+    controls(ui, &l);
     screen(app, ui, &l);
     knobs(app, ui, &l);
     pages(app, ui, &l);
@@ -117,6 +114,166 @@ pub fn draw(app: &mut App, ui: &mut Ui) {
     pads(app, ui, &l);
     patterns(app, ui, &l);
     footer(app, ui, &l);
+    silkscreen(ui, &l);
+}
+
+fn chassis(ui: &Ui, l: &L, body: Rect) {
+    let painter = ui.painter();
+    let radius = l.s(22.0);
+    for i in 0..6 {
+        let e = l.s(1.0 + i as f32 * 1.4);
+        painter.rect_filled(
+            body.expand(e).translate(vec2(0.0, l.s(5.0))),
+            radius + e,
+            Color32::from_black_alpha(26 - 4 * i as u8),
+        );
+    }
+    painter.rect_filled(body.translate(vec2(0.0, l.s(7.0))), radius, SIDE);
+    painter.rect_filled(body, radius, BODY);
+    painter.rect_stroke(
+        body.shrink(l.s(1.0)),
+        radius,
+        Stroke::new(l.s(1.0), Color32::from_white_alpha(70)),
+        StrokeKind::Inside,
+    );
+    painter.rect_stroke(
+        body,
+        radius,
+        Stroke::new(l.s(1.0), BODY_EDGE),
+        StrokeKind::Inside,
+    );
+    for (x, y) in [(28.0, 26.0), (1072.0, 26.0), (28.0, 674.0)] {
+        screw(painter, l.p(x, y), l.s(5.0));
+    }
+}
+
+fn screw(painter: &egui::Painter, c: Pos2, r: f32) {
+    painter.circle_filled(c + vec2(0.0, r * 0.2), r, Color32::from_black_alpha(60));
+    painter.circle_filled(c, r, mix(BODY, WHITE, 0.25));
+    painter.circle_stroke(c, r, Stroke::new(r * 0.15, BODY_EDGE));
+    let d = vec2(r * 0.55, -r * 0.55);
+    painter.line_segment([c - d, c + d], Stroke::new(r * 0.28, DIM_INK));
+}
+
+fn bevel(painter: &egui::Painter, rect: Rect, radius: f32, light: bool) {
+    let (top, bottom) = if light {
+        (
+            Color32::from_white_alpha(150),
+            Color32::from_black_alpha(30),
+        )
+    } else {
+        (Color32::from_white_alpha(30), Color32::from_black_alpha(60))
+    };
+    let inset = radius * 0.8;
+    let w = (rect.height() * 0.03).clamp(1.0, 2.0);
+    painter.line_segment(
+        [
+            pos2(rect.min.x + inset, rect.min.y + w * 0.5),
+            pos2(rect.max.x - inset, rect.min.y + w * 0.5),
+        ],
+        Stroke::new(w, top),
+    );
+    painter.line_segment(
+        [
+            pos2(rect.min.x + inset, rect.max.y - w * 0.5),
+            pos2(rect.max.x - inset, rect.max.y - w * 0.5),
+        ],
+        Stroke::new(w, bottom),
+    );
+}
+
+fn glass(painter: &egui::Painter, rect: Rect) {
+    let w = rect.width();
+    painter.add(Shape::convex_polygon(
+        vec![
+            rect.left_top(),
+            rect.left_top() + vec2(w * 0.42, 0.0),
+            rect.left_bottom() + vec2(w * 0.18, 0.0),
+            rect.left_bottom(),
+        ],
+        Color32::from_white_alpha(7),
+        Stroke::NONE,
+    ));
+}
+
+fn controls(ui: &Ui, l: &L) {
+    let items = [("OFF", 588.0), ("HIDE", 628.0)];
+    for (name, x) in items {
+        let c = l.p(x, 52.0);
+        let r = l.s(10.0);
+        let rect = Rect::from_center_size(c, vec2(r * 2.4, r * 2.4));
+        let resp = ui.interact(rect, Id::unique(("control", name)), Sense::click());
+        let painter = ui.painter();
+        let down = resp.is_pointer_button_down_on();
+        painter.circle_filled(c + vec2(0.0, l.s(2.5)), r, KEY_SHADOW);
+        let face = if name == "OFF" {
+            mix(KEY, ORANGE, 0.15)
+        } else {
+            KEY
+        };
+        let face = if resp.hovered() {
+            mix(face, ORANGE, 0.25)
+        } else {
+            face
+        };
+        let cc = c + vec2(0.0, if down { l.s(1.5) } else { 0.0 });
+        painter.circle_filled(cc, r, face);
+        painter.circle_stroke(
+            cc,
+            r * 0.98,
+            Stroke::new(l.s(1.0), Color32::from_white_alpha(25)),
+        );
+        painter.text(
+            c + vec2(0.0, r + l.s(9.0)),
+            Align2::CENTER_CENTER,
+            name,
+            l.f(7.0),
+            DIM_INK,
+        );
+        if resp.clicked() {
+            let cmd = if name == "OFF" {
+                egui::ViewportCommand::Close
+            } else {
+                egui::ViewportCommand::Minimized(true)
+            };
+            ui.ctx().send_viewport_cmd(cmd);
+        }
+    }
+    let grip = l.r(1050.0, 650.0, 30.0, 30.0);
+    let resp = ui.interact(grip, Id::unique("grip"), Sense::drag());
+    if resp.drag_started() {
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::BeginResize(
+                egui::viewport::ResizeDirection::SouthEast,
+            ));
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+    }
+    let painter = ui.painter();
+    for i in 0..3 {
+        let o = l.s(6.0 + i as f32 * 5.0);
+        let corner = l.p(1068.0, 668.0);
+        painter.line_segment(
+            [corner + vec2(-o, 0.0), corner + vec2(0.0, -o)],
+            Stroke::new(l.s(1.2), BODY_EDGE),
+        );
+    }
+}
+
+fn silkscreen(ui: &Ui, l: &L) {
+    let painter = ui.painter();
+    let labels = [
+        (674.0, 89.0, "GROUP"),
+        (906.0, 89.0, "MODE"),
+        (674.0, 543.0, "PATTERN"),
+        (674.0, 635.0, "STEP PAGE"),
+        (40.0, 520.0, "PAGE"),
+        (40.0, 566.0, "TRANSPORT / SAMPLER"),
+    ];
+    for (x, y, text) in labels {
+        painter.text(l.p(x, y), Align2::LEFT_CENTER, text, l.f(7.0), DIM_INK);
+    }
 }
 
 fn header(app: &mut App, ui: &Ui, l: &L) {
@@ -268,6 +425,7 @@ fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
             if lit { ORANGE } else { LCD_OFF },
         );
     }
+    glass(painter, rect);
 }
 
 fn fader(app: &mut App, ui: &Ui, l: &L) {
@@ -353,6 +511,7 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
         l.f(10.0),
         color,
     );
+    glass(painter, inner);
     let hovering = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
     if hovering {
         painter.rect_filled(inner, l.s(6.0), Color32::from_black_alpha(220));
@@ -1181,6 +1340,19 @@ fn knob(app: &mut App, ui: &Ui, l: &L, i: usize, param: Param, center: Pos2) {
     painter.circle_filled(center + vec2(0.0, l.s(3.0)), radius, mix(color, INK, 0.5));
     painter.circle_filled(center, radius, face);
     painter.circle_stroke(center, radius, Stroke::new(l.s(1.0), mix(color, INK, 0.3)));
+    for t in 0..36 {
+        let a = t as f32 / 36.0 * std::f32::consts::TAU;
+        let dir = vec2(a.cos(), a.sin());
+        painter.line_segment(
+            [center + dir * radius * 0.9, center + dir * radius * 0.99],
+            Stroke::new(l.s(1.2), mix(color, INK, 0.25)),
+        );
+    }
+    painter.circle_filled(
+        center - vec2(radius * 0.3, radius * 0.35),
+        radius * 0.32,
+        Color32::from_white_alpha(18),
+    );
     if let Some(u) = unit {
         let a = start + sweep * u;
         let dir = vec2(a.cos(), a.sin());
@@ -1422,6 +1594,7 @@ fn pads(app: &mut App, ui: &Ui, l: &L) {
             }
         }
         painter.rect_filled(face_rect, radius, face);
+        bevel(painter, face_rect, radius, true);
         if i == app.pad && !app.step_mode {
             painter.rect_stroke(
                 face_rect,

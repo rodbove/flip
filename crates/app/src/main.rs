@@ -42,6 +42,10 @@ impl eframe::App for Flip {
         ctx.request_repaint_after(if self.app.busy() { FRAME } else { IDLE });
     }
 
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
+    }
+
     fn on_exit(&mut self) {
         self.app.settings.save();
     }
@@ -52,7 +56,10 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("flip")
             .with_inner_size([1100.0, 700.0])
-            .with_min_inner_size([660.0, 420.0]),
+            .with_min_inner_size([550.0, 350.0])
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_has_shadow(false),
         ..Default::default()
     };
     eframe::run_native(

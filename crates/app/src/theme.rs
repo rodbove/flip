@@ -1,7 +1,7 @@
 use eframe::egui::Color32;
 
-pub const BACKDROP: Color32 = Color32::from_rgb(0x16, 0x16, 0x16);
 pub const BODY: Color32 = Color32::from_rgb(0x9d, 0x9e, 0x99);
+pub const SIDE: Color32 = Color32::from_rgb(0x6c, 0x6d, 0x69);
 pub const BODY_EDGE: Color32 = Color32::from_rgb(0x7a, 0x7b, 0x76);
 pub const INK: Color32 = Color32::from_rgb(0x1c, 0x1c, 0x1c);
 pub const DIM_INK: Color32 = Color32::from_rgb(0x45, 0x46, 0x42);

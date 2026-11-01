@@ -24,16 +24,28 @@ A pad sampler and synthesizer that runs on your computer. Record sounds, chop th
 - Map MIDI controls to the knobs.
 - Export a pattern or the song as a WAV file.
 
-## Run
+## Install
+
+On macOS:
 
 1. Install Rust.
-2. Run `cargo run --release`.
+2. Run `./scripts/install.sh`.
+3. Open Flip from Applications or Launchpad.
+4. Allow microphone access when macOS asks.
 
-On macOS, build an app bundle to use the microphone:
+The script builds the app and copies `Flip.app` to `/Applications`. If that folder is not writable, it uses `~/Applications`.
 
-1. Run `./scripts/bundle.sh`.
-2. Open `target/Flip.app`.
-3. Allow microphone access when macOS asks.
+## Run from source
+
+Run `cargo run --release`.
+
+## Window
+
+Flip has no window frame. It looks like a device on your desktop.
+
+- Drag an empty part of the body to move it.
+- Drag the ridges in the bottom-right corner to resize it.
+- Push HIDE to minimize it. Push OFF to quit.
 
 ## Controls
 
