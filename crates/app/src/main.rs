@@ -4,6 +4,7 @@ mod keys;
 mod midi;
 mod params;
 mod presets;
+mod record;
 mod settings;
 mod theme;
 mod view;

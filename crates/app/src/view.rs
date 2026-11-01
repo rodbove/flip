@@ -221,7 +221,8 @@ fn hint(app: &App) -> String {
         "PADS".into()
     };
     let rec = if app.rec_seq { "  REC" } else { "" };
-    format!("{mode}{rec}  /  help")
+    let grid = crate::record::GRIDS[app.settings.quantize.min(crate::record::GRIDS.len() - 1)].0;
+    format!("{mode}{rec}  GRID {grid}  /  help")
 }
 
 fn top_bar(app: &mut App, ui: &Ui, l: &L, bar: Rect) {
@@ -1017,7 +1018,7 @@ fn functions(app: &mut App, ui: &Ui, l: &L) {
         if key(ui, l, ("fn", i), rect, name, lit, true).clicked() {
             match i {
                 0 => app.toggle_play(),
-                1 => app.rec_seq = !app.rec_seq,
+                1 => app.toggle_rec(),
                 2 => app.toggle_metronome(),
                 3 => app.arm(),
                 4 => app.chop(),
@@ -1100,7 +1101,7 @@ fn pads(app: &mut App, ui: &Ui, l: &L) {
                 .interact_pointer_pos()
                 .map(|p| 1.0 - 0.6 * ((p.y - rect.min.y) / rect.height()).clamp(0.0, 1.0))
                 .unwrap_or(0.85);
-            app.press(g, i, 0, velocity, false);
+            app.press(g, i, 0, velocity, false, false);
             app.mouse = Some((g, i, 0));
         }
         let painter = ui.painter();

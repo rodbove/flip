@@ -18,6 +18,8 @@ pub struct Route {
     pub keys: AtomicBool,
 }
 
+const SUSTAIN: u8 = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
     Note {
@@ -26,6 +28,7 @@ pub enum Event {
         note: i8,
         velocity: f32,
         on: bool,
+        melodic: bool,
     },
     Control {
         cc: u8,
@@ -40,6 +43,10 @@ pub fn pad_for(note: u8) -> Option<usize> {
     }
     let row = 3 - n / 4;
     Some(row * 4 + n % 4)
+}
+
+pub fn melodic(route: &Route, note: u8) -> bool {
+    route.keys.load(Ordering::Relaxed) || pad_for(note).is_none()
 }
 
 pub fn map(route: &Route, note: u8) -> (usize, usize, i8) {
@@ -59,6 +66,7 @@ pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
     match (status & 0xF0, rest) {
         (0x90, [note, vel, ..]) | (0x80, [note, vel, ..]) => {
             let on = status & 0xF0 == 0x90 && *vel > 0;
+            let melodic = melodic(route, *note);
             let (group, pad, note) = map(route, *note);
             Some(Event::Note {
                 group,
@@ -66,6 +74,7 @@ pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
                 note,
                 velocity: *vel as f32 / 127.0,
                 on,
+                melodic,
             })
         }
         (0xB0, [cc, value, ..]) => Some(Event::Control {
@@ -74,6 +83,46 @@ pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
         }),
         _ => None,
     }
+}
+
+#[derive(Default)]
+pub struct Sustain {
+    down: bool,
+    held: Vec<Event>,
+}
+
+impl Sustain {
+    pub fn filter(&mut self, event: Event) -> Vec<Event> {
+        match event {
+            Event::Control { cc: SUSTAIN, value } => {
+                self.down = value >= 64;
+                if self.down {
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut self.held)
+                }
+            }
+            Event::Note {
+                group,
+                pad,
+                note,
+                on: true,
+                ..
+            } => {
+                self.held.retain(|h| !same_key(h, group, pad, note));
+                vec![event]
+            }
+            Event::Note { on: false, .. } if self.down => {
+                self.held.push(event);
+                Vec::new()
+            }
+            _ => vec![event],
+        }
+    }
+}
+
+fn same_key(e: &Event, g: usize, p: usize, n: i8) -> bool {
+    matches!(*e, Event::Note { group, pad, note, .. } if group == g && pad == p && note == n)
 }
 
 pub struct Midi {
@@ -122,6 +171,7 @@ impl Midi {
             .find(|p| input.port_name(p).is_ok_and(|n| n == wanted))
             .ok_or("port not found")?;
         let channel = self.channel.clone();
+        let mut sustain = Sustain::default();
         let connection = input
             .connect(
                 &port,
@@ -130,23 +180,26 @@ impl Midi {
                     let Some(event) = parse(&route, bytes) else {
                         return;
                     };
-                    if let Event::Note {
-                        group,
-                        pad,
-                        note,
-                        velocity,
-                        on,
-                    } = event
-                    {
-                        sender.send(Command::Note {
+                    for event in sustain.filter(event) {
+                        if let Event::Note {
                             group,
                             pad,
                             note,
                             velocity,
                             on,
-                        });
+                            ..
+                        } = event
+                        {
+                            sender.send(Command::Note {
+                                group,
+                                pad,
+                                note,
+                                velocity,
+                                on,
+                            });
+                        }
+                        let _ = channel.send(event);
                     }
-                    let _ = channel.send(event);
                     ctx.request_repaint();
                 },
                 (),
@@ -218,12 +271,64 @@ mod tests {
         }
 
         #[test]
+        fn marks_keyboard_notes_as_melodic() {
+            let route = Route::default();
+            assert!(matches!(
+                parse(&route, &[0x90, 72, 90]),
+                Some(Event::Note { melodic: true, .. })
+            ));
+            assert!(matches!(
+                parse(&route, &[0x90, 40, 90]),
+                Some(Event::Note { melodic: false, .. })
+            ));
+        }
+
+        #[test]
         fn reads_controls() {
             let route = Route::default();
             assert_eq!(
                 parse(&route, &[0xB3, 74, 100]),
                 Some(Event::Control { cc: 74, value: 100 })
             );
+        }
+    }
+
+    mod when_the_sustain_pedal_is_down {
+        use super::*;
+
+        fn note(n: i8, on: bool) -> Event {
+            Event::Note {
+                group: 0,
+                pad: 1,
+                note: n,
+                velocity: 0.8,
+                on,
+                melodic: true,
+            }
+        }
+
+        fn pedal(value: u8) -> Event {
+            Event::Control { cc: SUSTAIN, value }
+        }
+
+        #[test]
+        fn holds_releases_until_the_pedal_lifts() {
+            let mut s = Sustain::default();
+            assert_eq!(s.filter(pedal(127)), vec![]);
+            assert_eq!(s.filter(note(4, true)), vec![note(4, true)]);
+            assert_eq!(s.filter(note(4, false)), vec![]);
+            assert_eq!(s.filter(pedal(0)), vec![note(4, false)]);
+            assert_eq!(s.filter(note(4, false)), vec![note(4, false)]);
+        }
+
+        #[test]
+        fn forgets_a_held_release_when_the_key_is_struck_again() {
+            let mut s = Sustain::default();
+            s.filter(pedal(127));
+            s.filter(note(4, true));
+            s.filter(note(4, false));
+            s.filter(note(4, true));
+            assert_eq!(s.filter(pedal(0)), vec![]);
         }
     }
 }

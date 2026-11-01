@@ -14,6 +14,7 @@ pub struct Settings {
     pub labels: Vec<(String, String)>,
     pub last: Option<PathBuf>,
     pub threshold: f32,
+    pub quantize: usize,
 }
 
 impl Default for Settings {
@@ -26,6 +27,7 @@ impl Default for Settings {
             labels: Vec::new(),
             last: None,
             threshold: 0.05,
+            quantize: 2,
         }
     }
 }

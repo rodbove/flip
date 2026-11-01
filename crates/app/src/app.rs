@@ -6,14 +6,15 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 use flip_engine::project::LENGTHS;
 use flip_engine::{
-    Bounce, Command, GROUPS, PADS, Pad, Project, Report, STEPS, Sample, Source, Step, Tap, chop,
-    sample, store,
+    Bounce, Command, GROUPS, Note, PADS, Pad, Project, Report, STEPS, Sample, Source, Step, TICKS,
+    Tap, chop, sample, store,
 };
 
 use crate::audio::{self, Input, Output, Sender};
 use crate::midi::{self, Midi, Route};
 use crate::params::{self, PAGES, Param, Target};
 use crate::presets::{self, Library};
+use crate::record;
 use crate::settings::Settings;
 
 const UNDO: usize = 50;
@@ -28,6 +29,16 @@ pub enum View {
     Pad,
     Seq,
     Song,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpenNote {
+    group: usize,
+    pad: usize,
+    note: i8,
+    velocity: f32,
+    index: usize,
+    start: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +88,7 @@ pub struct App {
     pub keys: bool,
     pub octave: i8,
     pub rec_seq: bool,
+    pub open_notes: Vec<OpenNote>,
     pub capture: Capture,
     pub source: usize,
     pub sender: Sender,
@@ -122,6 +134,7 @@ impl App {
             keys: false,
             octave: 0,
             rec_seq: false,
+            open_notes: Vec::new(),
             capture: Capture::default(),
             source: 0,
             sender: Sender::default(),
@@ -339,7 +352,15 @@ impl App {
         });
     }
 
-    pub fn press(&mut self, group: usize, pad: usize, note: i8, velocity: f32, sent: bool) {
+    pub fn press(
+        &mut self,
+        group: usize,
+        pad: usize,
+        note: i8,
+        velocity: f32,
+        sent: bool,
+        melodic: bool,
+    ) {
         if !sent {
             self.send(Command::Note {
                 group,
@@ -354,8 +375,108 @@ impl App {
             self.select_pad(pad);
         }
         if self.rec_seq && self.report.playing {
-            self.record_hit(group, pad, note, velocity);
+            if melodic {
+                self.open_note(group, pad, note, velocity);
+            } else {
+                self.record_hit(group, pad, note, velocity);
+            }
         }
+    }
+
+    pub fn toggle_rec(&mut self) {
+        self.rec_seq = !self.rec_seq;
+        if self.rec_seq {
+            self.remember();
+        }
+        self.say(if self.rec_seq {
+            "pattern record on"
+        } else {
+            "pattern record off"
+        });
+    }
+
+    fn clock(&self, group: usize) -> Option<(usize, f64, u32)> {
+        let out = self.output.as_ref()?;
+        let timing = out.status.timing(group);
+        let pattern = &self.project.groups[group].patterns[timing.pattern];
+        let tick = timing.position(pattern.length) * TICKS as f64;
+        Some((timing.pattern, tick, pattern.ticks()))
+    }
+
+    fn open_note(&mut self, group: usize, pad: usize, note: i8, velocity: f32) {
+        let Some((index, start, _)) = self.clock(group) else {
+            return;
+        };
+        self.open_notes
+            .retain(|o| !(o.group == group && o.pad == pad && o.note == note));
+        self.open_notes.push(OpenNote {
+            group,
+            pad,
+            note,
+            velocity,
+            index,
+            start,
+        });
+    }
+
+    fn close_note(&mut self, group: usize, pad: usize, note: i8) {
+        let Some(at) = self
+            .open_notes
+            .iter()
+            .position(|o| o.group == group && o.pad == pad && o.note == note)
+        else {
+            return;
+        };
+        let open = self.open_notes.remove(at);
+        let Some((index, tick, total)) = self.clock(group) else {
+            return;
+        };
+        let end = if index == open.index {
+            tick
+        } else {
+            total as f64
+        };
+        let grid = record::grid(self.settings.quantize);
+        let total = self.project.groups[group].patterns[open.index].ticks();
+        let (start, length) = record::close(open.start, end, grid, total);
+        self.project.groups[group].patterns[open.index].add_note(Note {
+            pad: pad as u8,
+            start,
+            length,
+            pitch: note,
+            velocity: open.velocity,
+        });
+        self.sync_pattern(group, open.index);
+    }
+
+    pub fn cycle_grid(&mut self) {
+        self.settings.quantize = (self.settings.quantize + 1) % record::GRIDS.len();
+        self.say(format!(
+            "record grid {}",
+            record::GRIDS[self.settings.quantize].0
+        ));
+    }
+
+    pub fn quantize_notes(&mut self) {
+        let grid = record::grid(self.settings.quantize);
+        let (g, i, pad) = (self.group, self.editing(), self.pad);
+        if grid <= 1
+            || !self.project.groups[g].patterns[i]
+                .notes
+                .iter()
+                .any(|n| n.pad as usize == pad)
+        {
+            return;
+        }
+        self.remember();
+        let pattern = &mut self.project.groups[g].patterns[i];
+        let total = pattern.ticks();
+        for n in pattern.notes.iter_mut().filter(|n| n.pad as usize == pad) {
+            n.start = record::snap(n.start as f64, grid, total);
+        }
+        pattern.sort_notes();
+        self.sync_pattern(g, i);
+        self.say(format!("quantized {}", self.pad_name(g, pad)));
     }
 
     pub fn lift(&mut self, group: usize, pad: usize, note: i8, sent: bool) {
@@ -368,6 +489,7 @@ impl App {
                 on: false,
             });
         }
+        self.close_note(group, pad, note);
     }
 
     fn record_hit(&mut self, group: usize, pad: usize, note: i8, velocity: f32) {
@@ -914,9 +1036,10 @@ impl App {
                     note,
                     velocity,
                     on,
+                    melodic,
                 } => {
                     if on {
-                        self.press(group, pad, note, velocity, true);
+                        self.press(group, pad, note, velocity, true, melodic);
                     } else {
                         self.lift(group, pad, note, true);
                     }

@@ -21,6 +21,13 @@ pub struct Timing {
 }
 
 impl Timing {
+    pub fn position(&self, length: usize) -> f64 {
+        let length = length.max(1);
+        let current = (self.pos + length - 1) % length;
+        let into = (1.0 - (self.next_time - self.phase)).clamp(0.0, 0.999);
+        current as f64 + into
+    }
+
     pub fn nearest(&self, length: usize) -> usize {
         let length = length.max(1);
         let pos = self.pos % length;
@@ -206,6 +213,19 @@ mod tests {
             assert_eq!(t(0.1, 1.0, 1).nearest(16), 0);
             assert_eq!(t(15.9, 16.0, 0).nearest(16), 0);
             assert_eq!(t(16.2, 17.0, 1).nearest(16), 0);
+        }
+
+        #[test]
+        fn reads_the_exact_place_in_the_pattern() {
+            let t = |phase, next_time, pos| Timing {
+                playing: true,
+                phase,
+                next_time,
+                pos,
+                pattern: 0,
+            };
+            assert!((t(4.25, 5.0, 5).position(16) - 4.25).abs() < 1e-9);
+            assert!((t(15.5, 16.0, 0).position(16) - 15.5).abs() < 1e-9);
         }
 
         #[test]

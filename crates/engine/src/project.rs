@@ -9,6 +9,7 @@ pub const PADS: usize = 16;
 pub const STEPS: usize = 64;
 pub const PATTERNS: usize = 16;
 pub const LENGTHS: [usize; 4] = [16, 32, 48, 64];
+pub const TICKS: u32 = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Source {
@@ -297,10 +298,20 @@ impl Default for Step {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Note {
+    pub pad: u8,
+    pub start: u32,
+    pub length: u32,
+    pub pitch: i8,
+    pub velocity: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pattern {
     pub length: usize,
     pub steps: Vec<Step>,
+    pub notes: Vec<Note>,
 }
 
 impl Default for Pattern {
@@ -308,6 +319,7 @@ impl Default for Pattern {
         Self {
             length: 16,
             steps: vec![Step::default(); PADS * STEPS],
+            notes: Vec::new(),
         }
     }
 }
@@ -328,7 +340,30 @@ impl Pattern {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.steps.iter().all(|s| !s.on)
+        self.steps.iter().all(|s| !s.on) && self.notes.is_empty()
+    }
+
+    pub fn ticks(&self) -> u32 {
+        self.length as u32 * TICKS
+    }
+
+    pub fn add_note(&mut self, note: Note) {
+        let at = self.notes.partition_point(|n| n.start <= note.start);
+        self.notes.insert(at, note);
+    }
+
+    pub fn sort_notes(&mut self) {
+        self.notes.sort_by_key(|n| n.start);
+    }
+
+    pub fn clear_notes(&mut self, pad: usize) {
+        self.notes.retain(|n| n.pad as usize != pad);
+    }
+
+    pub fn notes_in(&self, from: u32, to: u32) -> &[Note] {
+        let a = self.notes.partition_point(|n| n.start < from);
+        let b = self.notes.partition_point(|n| n.start < to);
+        &self.notes[a..b.max(a)]
     }
 }
 
@@ -336,6 +371,8 @@ impl Pattern {
 struct PatternFile {
     length: usize,
     notes: Vec<(usize, usize, Step)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    clip: Vec<Note>,
 }
 
 impl Serialize for Pattern {
@@ -348,6 +385,7 @@ impl Serialize for Pattern {
         PatternFile {
             length: self.length,
             notes,
+            clip: self.notes.clone(),
         }
         .serialize(serializer)
     }
@@ -365,6 +403,17 @@ impl<'de> Deserialize<'de> for Pattern {
                 *pattern.step_mut(p, s) = step;
             }
         }
+        let ticks = pattern.ticks();
+        pattern.notes = file
+            .clip
+            .into_iter()
+            .filter(|n| (n.pad as usize) < PADS && n.start < ticks)
+            .map(|n| Note {
+                length: n.length.max(1),
+                ..n
+            })
+            .collect();
+        pattern.sort_notes();
         Ok(pattern)
     }
 }
@@ -489,6 +538,34 @@ mod tests {
             assert!(json.len() < 200, "{json}");
             let back: Pattern = serde_json::from_str(&json).unwrap();
             assert_eq!(back, pattern);
+        }
+
+        #[test]
+        fn keeps_recorded_notes_in_order() {
+            let mut pattern = Pattern::default();
+            let note = |start, pitch| Note {
+                pad: 2,
+                start,
+                length: 30,
+                pitch,
+                velocity: 0.7,
+            };
+            pattern.add_note(note(48, 4));
+            pattern.add_note(note(0, 0));
+            pattern.add_note(note(48, 7));
+            let json = serde_json::to_string(&pattern).unwrap();
+            let back: Pattern = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, pattern);
+            let starts: Vec<u32> = back.notes.iter().map(|n| n.start).collect();
+            assert_eq!(starts, vec![0, 48, 48]);
+            assert_eq!(back.notes_in(24, 72).len(), 2);
+        }
+
+        #[test]
+        fn drops_notes_past_the_end() {
+            let json = r#"{"length":16,"notes":[],"clip":[{"pad":0,"start":9999,"length":5,"pitch":0,"velocity":1.0}]}"#;
+            let back: Pattern = serde_json::from_str(json).unwrap();
+            assert!(back.notes.is_empty());
         }
     }
 

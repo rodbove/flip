@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
 use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
-use crate::project::{Filter, GROUPS, Mode, PADS, Pad, Pattern, Project, Source, Step};
+use crate::project::{Filter, GROUPS, Mode, PADS, Pad, Pattern, Project, Source, Step, TICKS};
 use crate::sample::Sample;
 use crate::synth::{fm, morph, string};
 
 const VOICES: usize = 48;
 const KILL: u32 = 96;
 const TRASH: usize = 256;
+const PENDING: usize = 256;
 const COEF_EVERY: u32 = 16;
 const MIDDLE_C: f32 = 261.626;
 const GATE_SHARE: f64 = 0.9;
@@ -102,6 +103,16 @@ struct Voice {
     string: string::State,
 }
 
+#[derive(Clone, Copy)]
+struct Pending {
+    group: usize,
+    pad: usize,
+    note: i8,
+    velocity: f32,
+    at: f64,
+    gate: u64,
+}
+
 #[derive(Default)]
 struct Click {
     phase: f32,
@@ -137,6 +148,7 @@ pub struct Engine {
     entry: usize,
     entry_pos: usize,
     suppress: [u32; GROUPS],
+    pending: Vec<Pending>,
     click: Click,
     tap: Option<Tap>,
     age: u64,
@@ -165,6 +177,7 @@ impl Engine {
             entry: 0,
             entry_pos: 0,
             suppress: [0; GROUPS],
+            pending: Vec::with_capacity(PENDING),
             click: Click::default(),
             tap: None,
             age: 0,
@@ -306,6 +319,7 @@ impl Engine {
 
     fn transport(&mut self, on: bool) {
         self.playing = on;
+        self.pending.clear();
         if on {
             self.phase = 0.0;
             self.next = 0;
@@ -391,6 +405,7 @@ impl Engine {
                 }
                 self.note_on(g, pad, step.pitch, step.velocity, Some(gate));
             }
+            self.queue_notes(g, at);
             self.pos[g] = (at + 1) % length;
         }
         if song {
@@ -401,6 +416,40 @@ impl Engine {
             }
         }
         self.next += 1;
+    }
+
+    fn queue_notes(&mut self, group: usize, at: usize) {
+        let start = self.step_time(self.next);
+        let per_tick = self.step_samples() / TICKS as f64;
+        let pattern = &self.project.groups[group].patterns[self.current[group]];
+        let from = at as u32 * TICKS;
+        for n in pattern.notes_in(from, from + TICKS) {
+            if self.pending.len() >= self.pending.capacity() {
+                break;
+            }
+            self.pending.push(Pending {
+                group,
+                pad: n.pad as usize,
+                note: n.pitch,
+                velocity: n.velocity,
+                at: start + (n.start - from) as f64 / TICKS as f64,
+                gate: (n.length as f64 * per_tick) as u64,
+            });
+        }
+    }
+
+    fn play_pending(&mut self) {
+        let mut i = 0;
+        while i < self.pending.len() {
+            if self.pending[i].at <= self.phase {
+                let p = self.pending.swap_remove(i);
+                if p.pad < PADS {
+                    self.note_on(p.group, p.pad, p.note, p.velocity, Some(p.gate));
+                }
+            } else {
+                i += 1;
+            }
+        }
     }
 
     fn note_on(&mut self, group: usize, pad: usize, note: i8, velocity: f32, gate: Option<u64>) {
@@ -505,6 +554,9 @@ impl Engine {
                 let inc = 1.0 / self.step_samples();
                 while self.phase >= self.step_time(self.next) {
                     self.fire();
+                }
+                if !self.pending.is_empty() {
+                    self.play_pending();
                 }
                 self.phase += inc;
             }
@@ -1017,6 +1069,57 @@ mod tests {
             steps(&mut e, 1.0);
             assert_eq!(e.suppress[2], 0);
             assert!(e.project.pattern(2).step(0, 1).on);
+        }
+    }
+
+    mod when_playing_recorded_notes {
+        use super::*;
+        use crate::project::Note;
+
+        fn with_chord(start: u32, length: u32) -> Engine {
+            let mut project = Project::default();
+            let pad = &mut project.groups[1].pads[0];
+            pad.source = Source::Fm;
+            pad.mode = Mode::Gate;
+            pad.sustain = 1.0;
+            pad.release = 0.01;
+            for pitch in [0, 4, 7] {
+                project.groups[1].patterns[0].add_note(Note {
+                    pad: 0,
+                    start,
+                    length,
+                    pitch,
+                    velocity: 0.9,
+                });
+            }
+            Engine::new(project, RATE)
+        }
+
+        #[test]
+        fn starts_them_at_their_tick() {
+            let mut e = with_chord(TICKS * 2 + TICKS / 2, TICKS * 4);
+            e.handle(Command::Play(true));
+            steps(&mut e, 2.4);
+            assert_eq!(e.report().voices, 0);
+            steps(&mut e, 0.2);
+            assert_eq!(e.report().voices, 3);
+        }
+
+        #[test]
+        fn releases_them_after_their_length() {
+            let mut e = with_chord(0, TICKS * 2);
+            e.handle(Command::Play(true));
+            steps(&mut e, 1.5);
+            assert_eq!(e.report().voices, 3);
+            steps(&mut e, 2.0);
+            assert_eq!(e.report().voices, 0);
+        }
+
+        #[test]
+        fn bounces_them_into_the_file() {
+            let e = with_chord(0, TICKS * 8);
+            let out = bounce(e.project(), RATE, Bounce::Group(1), 0.0);
+            assert!(loud(&out) > 0.05);
         }
     }
 

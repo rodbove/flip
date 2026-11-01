@@ -48,6 +48,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("5 / 6 / 7", "screen pad/seq/song"),
     ("SPACE", "play / stop"),
     ("ENTER", "record into pattern"),
+    ("9 / 0", "record grid / quantize notes"),
     ("B", "sample (again: stop)"),
     ("M", "metronome"),
     ("[ ]", "pattern -/+"),
@@ -157,21 +158,14 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             if modifiers.shift && !app.keys {
                 app.select_pad(p);
             } else {
-                app.press(g, p, n, VELOCITY, false);
+                app.press(g, p, n, VELOCITY, false, app.keys);
                 app.held.push((code, g, p, n));
             }
             continue;
         }
         match code {
             Key::Space => app.toggle_play(),
-            Key::Enter => {
-                app.rec_seq = !app.rec_seq;
-                app.say(if app.rec_seq {
-                    "pattern record on"
-                } else {
-                    "pattern record off"
-                });
-            }
+            Key::Enter => app.toggle_rec(),
             Key::B => app.arm(),
             Key::M => app.toggle_metronome(),
             Key::Tab => {
@@ -216,6 +210,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             Key::Num5 => app.view = View::Pad,
             Key::Num6 => app.view = View::Seq,
             Key::Num7 => app.view = View::Song,
+            Key::Num9 => app.cycle_grid(),
+            Key::Num0 => app.quantize_notes(),
             _ => {}
         }
     }
