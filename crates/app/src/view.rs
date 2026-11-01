@@ -179,6 +179,8 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
         rec_view(app, ui, l, body);
     } else if app.help {
         help_view(ui, l, body);
+    } else if app.browser {
+        preset_view(app, ui, l, body);
     } else {
         match app.view {
             View::Pad => pad_view(app, ui, l, body),
@@ -769,6 +771,118 @@ fn help_view(ui: &Ui, l: &L, body: Rect) {
             l.f(10.0),
             SCREEN_INK,
         );
+    }
+}
+
+fn preset_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
+    use flip_engine::preset::CATEGORIES;
+    let tab_w = body.width() / CATEGORIES.len() as f32;
+    let tab_h = l.s(18.0);
+    let mut pick_category = None;
+    for (i, name) in CATEGORIES.iter().enumerate() {
+        let rect = Rect::from_min_size(body.min + vec2(i as f32 * tab_w, 0.0), vec2(tab_w, tab_h));
+        let resp = ui.interact(rect, Id::unique(("preset-tab", i)), Sense::click());
+        let on = app.library.category == i;
+        let painter = ui.painter();
+        if on {
+            painter.rect_filled(rect.shrink(l.s(1.0)), l.s(3.0), SCREEN_FAINT);
+        }
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            *name,
+            l.f(9.0),
+            if on { ORANGE } else { SCREEN_DIM },
+        );
+        if resp.clicked() {
+            pick_category = Some(i);
+        }
+    }
+    if let Some(i) = pick_category {
+        app.library.category = i;
+        app.library.cursor = 0;
+    }
+    let list = Rect::from_min_max(body.min + vec2(0.0, tab_h + l.s(6.0)), body.max);
+    let shown = app.library.shown();
+    if shown.is_empty() {
+        ui.painter().text(
+            list.center(),
+            Align2::CENTER_CENTER,
+            "no presets here yet  SHIFT P saves the selected pad",
+            l.f(10.0),
+            SCREEN_DIM,
+        );
+        return;
+    }
+    let row_h = l.s(18.0);
+    let rows = ((list.height() / row_h).floor() as usize).max(1);
+    let columns = 3;
+    let col_w = list.width() / columns as f32;
+    let page = app.library.cursor / (rows * columns);
+    let first = page * rows * columns;
+    let mut load = None;
+    for (slot, &index) in shown.iter().enumerate().skip(first).take(rows * columns) {
+        let n = slot - first;
+        let rect = Rect::from_min_size(
+            list.min + vec2((n / rows) as f32 * col_w, (n % rows) as f32 * row_h),
+            vec2(col_w - l.s(6.0), row_h - l.s(2.0)),
+        );
+        let resp = ui.interact(rect, Id::unique(("preset", index)), Sense::click());
+        let on = slot == app.library.cursor;
+        let painter = ui.painter();
+        if on {
+            painter.rect_filled(rect, l.s(3.0), SCREEN_FAINT);
+        }
+        let preset = &app.library.items[index];
+        painter.text(
+            rect.left_center() + vec2(l.s(6.0), 0.0),
+            Align2::LEFT_CENTER,
+            preset.name.to_uppercase(),
+            l.f(10.0),
+            if on { ORANGE } else { SCREEN_INK },
+        );
+        painter.text(
+            rect.right_center() - vec2(l.s(6.0), 0.0),
+            Align2::RIGHT_CENTER,
+            Param::Source.text(Param::Source.pad_get(&preset.sound)),
+            l.f(8.0),
+            SCREEN_DIM,
+        );
+        if resp.clicked() {
+            app.library.cursor = slot;
+            load = Some(index);
+        }
+    }
+    if let Some(i) = load {
+        app.load_preset(i);
+    }
+}
+
+pub fn naming(app: &mut App, ctx: &egui::Context) {
+    let Some(mut name) = app.naming.take() else {
+        return;
+    };
+    let mut open = true;
+    let mut done = false;
+    egui::Window::new("SAVE PRESET")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            let edit = ui.text_edit_singleline(&mut name);
+            if !edit.has_focus() && !edit.lost_focus() {
+                edit.request_focus();
+            }
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("SAVE").clicked() || enter {
+                done = true;
+            }
+        });
+    if done {
+        app.save_preset(&name);
+    } else if open && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.naming = Some(name);
     }
 }
 

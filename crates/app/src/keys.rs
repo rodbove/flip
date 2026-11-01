@@ -55,6 +55,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("UP / DOWN", "tempo -/+"),
     ("BACKSPACE", "clear pad steps"),
     ("CMD Z S O E", "undo save open export"),
+    ("P / SHIFT P", "presets / save preset"),
+    (", .", "previous / next preset"),
     ("ESC", "cancel / close"),
     ("/", "this help"),
 ];
@@ -116,6 +118,36 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             }
             continue;
         }
+        if app.browser {
+            let handled = match code {
+                Key::ArrowUp => {
+                    app.library.move_cursor(-1);
+                    true
+                }
+                Key::ArrowDown => {
+                    app.library.move_cursor(1);
+                    true
+                }
+                Key::ArrowLeft => {
+                    app.library.move_category(-1);
+                    true
+                }
+                Key::ArrowRight => {
+                    app.library.move_category(1);
+                    true
+                }
+                Key::Enter => {
+                    if let Some(i) = app.library.selected() {
+                        app.load_preset(i);
+                    }
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                continue;
+            }
+        }
         if app.keys && matches!(code, Key::Z | Key::X) {
             app.octave = (app.octave + if code == Key::Z { -1 } else { 1 }).clamp(-4, 4);
             app.say(format!("octave {:+}", app.octave));
@@ -169,10 +201,18 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                     app.say("recording cancelled");
                 }
                 app.help = false;
+                app.browser = false;
                 app.setup = false;
                 app.learn = None;
             }
             Key::Slash | Key::Questionmark => app.help = !app.help,
+            Key::P if modifiers.shift => app.naming = Some(app.current_pad().label()),
+            Key::P => {
+                app.browser = !app.browser;
+                app.help = false;
+            }
+            Key::Comma => app.step_preset(-1),
+            Key::Period => app.step_preset(1),
             Key::Num5 => app.view = View::Pad,
             Key::Num6 => app.view = View::Seq,
             Key::Num7 => app.view = View::Song,

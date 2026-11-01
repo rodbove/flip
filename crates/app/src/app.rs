@@ -13,6 +13,7 @@ use flip_engine::{
 use crate::audio::{self, Input, Output, Sender};
 use crate::midi::{self, Midi, Route};
 use crate::params::{self, PAGES, Param, Target};
+use crate::presets::{self, Library};
 use crate::settings::Settings;
 
 const UNDO: usize = 50;
@@ -91,6 +92,9 @@ pub struct App {
     pub learn: Option<Param>,
     pub setup: bool,
     pub help: bool,
+    pub library: Library,
+    pub browser: bool,
+    pub naming: Option<String>,
     pub held: Vec<(egui::Key, usize, usize, i8)>,
     pub mouse: Option<(usize, usize, i8)>,
     pub now: f64,
@@ -133,6 +137,9 @@ impl App {
             learn: None,
             setup: false,
             help: false,
+            library: Library::load(),
+            browser: false,
+            naming: None,
             held: Vec::new(),
             mouse: None,
             now: 0.0,
@@ -501,6 +508,40 @@ impl App {
             params::synth_page(self.current_pad().source, self.sub).1
         } else {
             PAGES[self.page].1
+        }
+    }
+
+    pub fn load_preset(&mut self, index: usize) {
+        let Some(preset) = self.library.items.get(index).cloned() else {
+            return;
+        };
+        self.remember();
+        let (g, p) = (self.group, self.pad);
+        preset.apply(&mut self.project.groups[g].pads[p]);
+        self.sync_pad(g, p);
+        self.sub = 0;
+        self.say(format!("{} on {}", preset.name, self.pad_name(g, p)));
+    }
+
+    pub fn step_preset(&mut self, delta: i32) {
+        self.library.move_cursor(delta);
+        if let Some(i) = self.library.selected() {
+            self.load_preset(i);
+        }
+    }
+
+    pub fn save_preset(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let preset = flip_engine::preset::Preset::capture(name, self.current_pad());
+        match presets::save(&preset) {
+            Ok(_) => {
+                self.library.add(preset);
+                self.say(format!("saved preset {name}"));
+            }
+            Err(e) => self.say(format!("could not save preset: {e}")),
         }
     }
 

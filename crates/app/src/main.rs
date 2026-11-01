@@ -3,6 +3,7 @@ mod audio;
 mod keys;
 mod midi;
 mod params;
+mod presets;
 mod settings;
 mod theme;
 mod view;
@@ -34,6 +35,7 @@ impl eframe::App for Flip {
         keys::handle(&mut self.app, &ctx);
         view::draw(&mut self.app, ui);
         view::setup(&mut self.app, &ctx);
+        view::naming(&mut self.app, &ctx);
         ctx.request_repaint_after(if self.app.busy() { FRAME } else { IDLE });
     }
 
