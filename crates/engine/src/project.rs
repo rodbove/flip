@@ -450,6 +450,7 @@ pub struct Project {
     pub groups: Vec<Group>,
     pub song: Vec<[usize; GROUPS]>,
     pub song_mode: bool,
+    pub mood: String,
 }
 
 impl Default for Project {
@@ -462,6 +463,7 @@ impl Default for Project {
             groups: vec![Group::default(); GROUPS],
             song: Vec::new(),
             song_mode: false,
+            mood: String::new(),
         }
     }
 }

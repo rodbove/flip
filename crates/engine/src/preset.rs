@@ -42,14 +42,14 @@ impl Preset {
     }
 }
 
-struct Amp {
-    attack: f32,
-    decay: f32,
-    sustain: f32,
-    release: f32,
+pub(crate) struct Amp {
+    pub(crate) attack: f32,
+    pub(crate) decay: f32,
+    pub(crate) sustain: f32,
+    pub(crate) release: f32,
 }
 
-const fn amp(attack: f32, decay: f32, sustain: f32, release: f32) -> Amp {
+pub(crate) const fn amp(attack: f32, decay: f32, sustain: f32, release: f32) -> Amp {
     Amp {
         attack,
         decay,
@@ -58,7 +58,7 @@ const fn amp(attack: f32, decay: f32, sustain: f32, release: f32) -> Amp {
     }
 }
 
-fn voice(source: Source, env: Amp, gain: f32) -> Pad {
+pub(crate) fn voice(source: Source, env: Amp, gain: f32) -> Pad {
     Pad {
         source,
         attack: env.attack,
@@ -81,7 +81,7 @@ fn preset(name: &str, category: &str, sound: Pad) -> Preset {
     }
 }
 
-fn op(ratio: f32, level: f32, decay: f32, fine: f32) -> Op {
+pub(crate) fn op(ratio: f32, level: f32, decay: f32, fine: f32) -> Op {
     Op {
         ratio,
         level,
@@ -90,7 +90,14 @@ fn op(ratio: f32, level: f32, decay: f32, fine: f32) -> Op {
     }
 }
 
-fn fm(algorithm: u8, ops: [Op; 4], feedback: f32, depth: f32, touch: f32, env: Amp) -> Pad {
+pub(crate) fn fm(
+    algorithm: u8,
+    ops: [Op; 4],
+    feedback: f32,
+    depth: f32,
+    touch: f32,
+    env: Amp,
+) -> Pad {
     Pad {
         fm: Fm {
             ops,
@@ -103,7 +110,7 @@ fn fm(algorithm: u8, ops: [Op; 4], feedback: f32, depth: f32, touch: f32, env: A
     }
 }
 
-fn string(damping: f32, brightness: f32, body: f32, bow: f32, env: Amp) -> Pad {
+pub(crate) fn string(damping: f32, brightness: f32, body: f32, bow: f32, env: Amp) -> Pad {
     Pad {
         pluck: Pluck {
             damping,
@@ -115,7 +122,14 @@ fn string(damping: f32, brightness: f32, body: f32, bow: f32, env: Amp) -> Pad {
     }
 }
 
-fn morph(position: f32, spread: f32, sub: f32, drive: f32, cutoff: f32, env: Amp) -> Pad {
+pub(crate) fn morph(
+    position: f32,
+    spread: f32,
+    sub: f32,
+    drive: f32,
+    cutoff: f32,
+    env: Amp,
+) -> Pad {
     Pad {
         morph: Morph {
             position,
@@ -128,7 +142,7 @@ fn morph(position: f32, spread: f32, sub: f32, drive: f32, cutoff: f32, env: Amp
     }
 }
 
-fn analog(a: Wave, b: Wave, detune: f32, mix: f32, cutoff: f32, env: Amp) -> Pad {
+pub(crate) fn analog(a: Wave, b: Wave, detune: f32, mix: f32, cutoff: f32, env: Amp) -> Pad {
     Pad {
         synth: Synth {
             wave_a: a,
@@ -142,7 +156,7 @@ fn analog(a: Wave, b: Wave, detune: f32, mix: f32, cutoff: f32, env: Amp) -> Pad
     }
 }
 
-fn pitched(mut pad: Pad, pitch: f32) -> Pad {
+pub(crate) fn pitched(mut pad: Pad, pitch: f32) -> Pad {
     pad.pitch = pitch;
     pad
 }

@@ -3,6 +3,7 @@ pub mod dsp;
 pub mod engine;
 pub mod kit;
 pub mod live;
+pub mod mood;
 pub mod preset;
 pub mod project;
 pub mod sample;

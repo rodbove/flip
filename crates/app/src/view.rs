@@ -4,7 +4,7 @@ use eframe::egui::{
     self, Align2, Color32, FontId, Id, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui,
     pos2, vec2,
 };
-use flip_engine::{GROUPS, PADS, PATTERNS};
+use flip_engine::{GROUPS, PADS, PATTERNS, mood};
 
 use crate::app::{App, FLASH, Take, View};
 use crate::keys::{HELP, PAD_KEYS};
@@ -336,6 +336,8 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
             View::Seq => seq_view(app, ui, l, body),
             View::Song => song_view(app, ui, l, body),
             View::Roll => crate::roll::view(app, ui, l, body),
+            View::Keys => crate::keyview::view(app, ui, l, body),
+            View::Mood => mood_view(app, ui, l, body),
         }
     }
     let painter = ui.painter();
@@ -401,19 +403,11 @@ fn top_bar(app: &mut App, ui: &Ui, l: &L, bar: Rect) {
         l.f(11.0),
         SCREEN_INK,
     );
-    if playing {
-        let beat = (app.report.phase as usize / 4) % 4;
-        for b in 0..4 {
-            let c = pos2(bar.min.x + l.s(290.0 + b as f32 * 12.0), y);
-            let color = if b == beat { ORANGE } else { SCREEN_DIM };
-            painter.circle_filled(c, l.s(3.0), color);
-        }
-    }
     for ch in 0..2 {
-        let x = bar.min.x + l.s(350.0);
+        let x = bar.min.x + l.s(282.0);
         let rect = Rect::from_min_size(
             pos2(x, y - l.s(5.0) + ch as f32 * l.s(6.0)),
-            vec2(l.s(56.0), l.s(4.0)),
+            vec2(l.s(40.0), l.s(4.0)),
         );
         painter.rect_filled(rect, 0.0, SCREEN_FAINT);
         let level = app.meter[ch].clamp(0.0, 1.0);
@@ -427,11 +421,13 @@ fn top_bar(app: &mut App, ui: &Ui, l: &L, bar: Rect) {
         ("SEQ", View::Seq),
         ("SONG", View::Song),
         ("ROLL", View::Roll),
+        ("KEYS", View::Keys),
+        ("MOOD", View::Mood),
     ];
     for (i, (name, view)) in tabs.iter().enumerate() {
         let rect = Rect::from_center_size(
-            pos2(bar.max.x - l.s(152.0 - i as f32 * 38.0), y),
-            vec2(l.s(34.0), l.s(18.0)),
+            pos2(bar.max.x - l.s(230.0 - i as f32 * 40.0), y),
+            vec2(l.s(36.0), l.s(18.0)),
         );
         let resp = ui.interact(rect, Id::unique(("tab", i)), Sense::click());
         let on = app.view == *view && !app.help;
@@ -752,6 +748,116 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
             app.page = 5;
         }
     }
+}
+
+fn mood_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
+    let current = mood::find(&app.project.mood);
+    ui.painter().text(
+        body.left_top(),
+        Align2::LEFT_TOP,
+        "MOOD",
+        l.f(11.0),
+        SCREEN_INK,
+    );
+    ui.painter().text(
+        body.left_top() + vec2(l.s(44.0), 0.0),
+        Align2::LEFT_TOP,
+        "loads A drums, B bass, C keys, D lead + fx",
+        l.f(10.0),
+        SCREEN_DIM,
+    );
+    let grid = Rect::from_min_max(
+        body.min + vec2(0.0, l.s(20.0)),
+        body.max - vec2(0.0, l.s(28.0)),
+    );
+    let (cols, rows) = (4, 3);
+    let gap = l.s(6.0);
+    let w = (grid.width() - gap * (cols - 1) as f32) / cols as f32;
+    let h = (grid.height() - gap * (rows - 1) as f32) / rows as f32;
+    for (i, m) in mood::MOODS.iter().enumerate() {
+        let (r, c) = (i / cols, i % cols);
+        let rect = Rect::from_min_size(
+            grid.min + vec2(c as f32 * (w + gap), r as f32 * (h + gap)),
+            vec2(w, h),
+        );
+        let resp = ui.interact(rect, Id::unique(("mood", i)), Sense::click());
+        let on = current == Some(i);
+        let painter = ui.painter();
+        if on {
+            painter.rect_filled(rect, l.s(4.0), ORANGE);
+        } else {
+            painter.rect_stroke(
+                rect,
+                l.s(4.0),
+                Stroke::new(
+                    l.s(1.0),
+                    if resp.hovered() {
+                        SCREEN_INK
+                    } else {
+                        SCREEN_DIM
+                    },
+                ),
+                StrokeKind::Inside,
+            );
+        }
+        let (ink, dim) = if on {
+            (SCREEN, SCREEN)
+        } else {
+            (SCREEN_INK, SCREEN_DIM)
+        };
+        painter.text(
+            rect.left_top() + vec2(l.s(8.0), l.s(6.0)),
+            Align2::LEFT_TOP,
+            m.name,
+            l.f(12.0),
+            ink,
+        );
+        painter.text(
+            rect.left_bottom() + vec2(l.s(8.0), -l.s(6.0)),
+            Align2::LEFT_BOTTOM,
+            format!("{} / {:.0}", m.blurb, m.tempo),
+            l.f(8.0),
+            dim,
+        );
+        if resp.clicked() {
+            app.load_mood(i);
+        }
+    }
+    let labels = ["BEAT", "DICE"];
+    for (i, label) in labels.iter().enumerate() {
+        let rect = Rect::from_min_size(
+            pos2(body.min.x + i as f32 * l.s(96.0), body.max.y - l.s(22.0)),
+            vec2(l.s(88.0), l.s(20.0)),
+        );
+        let resp = ui.interact(rect, Id::unique(("moodkey", i)), Sense::click());
+        ui.painter().rect_stroke(
+            rect,
+            l.s(3.0),
+            Stroke::new(l.s(1.0), SCREEN_INK),
+            StrokeKind::Inside,
+        );
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            *label,
+            l.f(10.0),
+            SCREEN_INK,
+        );
+        if resp.clicked() {
+            if i == 0 {
+                app.mood_beat();
+            } else {
+                app.dice();
+            }
+        }
+    }
+    ui.painter().text(
+        pos2(body.min.x + l.s(196.0), body.max.y - l.s(12.0)),
+        Align2::LEFT_CENTER,
+        format!("DICE changes {}", app.pad_name(app.group, app.pad)),
+        l.f(9.0),
+        SCREEN_DIM,
+    );
 }
 
 fn song_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {

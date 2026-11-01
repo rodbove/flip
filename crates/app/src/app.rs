@@ -7,10 +7,11 @@ use eframe::egui;
 use flip_engine::project::LENGTHS;
 use flip_engine::{
     Bounce, Command, GROUPS, Note, PADS, Pad, Project, Report, STEPS, Sample, Source, Step, TICKS,
-    Tap, chop, sample, store,
+    Tap, chop, mood, sample, store,
 };
 
 use crate::audio::{self, Input, Output, Sender};
+use crate::keyview::{self, Keyboard};
 use crate::midi::{self, Midi, Route};
 use crate::params::{self, PAGES, Param, Target};
 use crate::presets::{self, Library};
@@ -31,6 +32,8 @@ pub enum View {
     Seq,
     Song,
     Roll,
+    Keys,
+    Mood,
 }
 
 pub struct RollDrag {
@@ -124,6 +127,7 @@ pub struct App {
     pub meter: [f32; 2],
     pub drag: Option<(usize, f32)>,
     pub tempo_entry: Option<String>,
+    pub keyboard: Keyboard,
     pub lists: Option<(Vec<String>, Vec<String>, Vec<String>)>,
     pub ctx: egui::Context,
     title: String,
@@ -174,6 +178,7 @@ impl App {
             meter: [0.0; 2],
             drag: None,
             tempo_entry: None,
+            keyboard: Keyboard::default(),
             lists: None,
             ctx,
             title: String::new(),
@@ -352,6 +357,57 @@ impl App {
         self.report.playing = on;
     }
 
+    pub fn load_mood(&mut self, index: usize) {
+        self.remember();
+        mood::apply(&mut self.project, index);
+        self.sync_all();
+        self.say(format!(
+            "{} loaded: A drums, B bass, C keys, D lead",
+            mood::MOODS[index].name.to_lowercase()
+        ));
+    }
+
+    pub fn mood_beat(&mut self) {
+        let Some(index) = mood::find(&self.project.mood) else {
+            self.say("load a mood first");
+            return;
+        };
+        self.remember();
+        let pattern = self.project.groups[0].pattern;
+        mood::beat(&mut self.project, index, pattern);
+        self.project.groups[1].pattern = pattern;
+        self.sync_all();
+        self.say(format!(
+            "{} beat in A{:02} and B{:02}",
+            mood::MOODS[index].name.to_lowercase(),
+            pattern + 1,
+            pattern + 1
+        ));
+    }
+
+    pub fn dice(&mut self) {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(1);
+        let (g, p) = (self.group, self.pad);
+        match mood::dice(&self.project, g, p, seed) {
+            Some(pad) => {
+                self.remember();
+                let name = pad.name.clone();
+                self.project.groups[g].pads[p] = Pad {
+                    sample: None,
+                    sample_id: None,
+                    ..pad
+                };
+                self.sync_pad(g, p);
+                self.press(g, p, 0, 0.85, false, false);
+                self.say(format!("dice {} -> {name}", self.pad_name(g, p)));
+            }
+            None => self.say("load a mood first"),
+        }
+    }
+
     pub fn tempo_key(&mut self) {
         match self.tempo_entry.take() {
             None => {
@@ -421,6 +477,9 @@ impl App {
                 velocity,
                 on: true,
             });
+            if melodic {
+                self.keyboard.press(keyview::key_of(note), self.now);
+            }
         }
         self.flashes[group][pad] = self.now;
         if group == self.group && !self.keys {
@@ -540,6 +599,9 @@ impl App {
                 velocity: 0.0,
                 on: false,
             });
+            if self.keys {
+                self.keyboard.release(keyview::key_of(note), self.now);
+            }
         }
         self.close_note(group, pad, note);
     }
@@ -1093,7 +1155,18 @@ impl App {
                     velocity,
                     on,
                     melodic,
+                    key,
                 } => {
+                    if on {
+                        self.keyboard.press(key, now);
+                        if !self.keyboard.heard {
+                            self.keyboard.heard = true;
+                            self.view = View::Keys;
+                            self.help = false;
+                        }
+                    } else {
+                        self.keyboard.release(key, now);
+                    }
                     if on {
                         self.press(group, pad, note, velocity, true, melodic);
                     } else {
@@ -1103,6 +1176,9 @@ impl App {
                 midi::Event::Control { cc, value } => self.control(cc, value),
             }
         }
+        let sounding = keyview::sounding(self);
+        self.keyboard.playback(&sounding, now);
+        self.keyboard.prune(now);
         self.pump_capture();
         if self.toast.as_ref().is_some_and(|(_, until)| now > *until) {
             self.toast = None;

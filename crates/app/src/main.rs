@@ -1,6 +1,7 @@
 mod app;
 mod audio;
 mod keys;
+mod keyview;
 mod midi;
 mod params;
 mod presets;

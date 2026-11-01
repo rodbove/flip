@@ -29,6 +29,7 @@ pub enum Event {
         velocity: f32,
         on: bool,
         melodic: bool,
+        key: u8,
     },
     Control {
         cc: u8,
@@ -66,6 +67,7 @@ pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
     match (status & 0xF0, rest) {
         (0x90, [note, vel, ..]) | (0x80, [note, vel, ..]) => {
             let on = status & 0xF0 == 0x90 && *vel > 0;
+            let key = *note;
             let melodic = melodic(route, *note);
             let (group, pad, note) = map(route, *note);
             Some(Event::Note {
@@ -75,6 +77,7 @@ pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
                 velocity: *vel as f32 / 127.0,
                 on,
                 melodic,
+                key,
             })
         }
         (0xB0, [cc, value, ..]) => Some(Event::Control {
@@ -304,6 +307,7 @@ mod tests {
                 velocity: 0.8,
                 on,
                 melodic: true,
+                key: (60 + n as i32) as u8,
             }
         }
 

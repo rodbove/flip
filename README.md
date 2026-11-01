@@ -6,6 +6,8 @@ A pad sampler and synthesizer that runs on your computer. Record sounds, chop th
 
 - 4 groups (A to D) of 16 pads.
 - Each pad plays a sample or a synth engine: ANALOG (two oscillators), FM (four operators, eight algorithms), STRING (plucked or bowed string) or MORPH (a wave that morphs from sine to square, with unison).
+- 12 moods load a full set of sounds into the 4 groups: DUSTY, CLUB, TRAP, DREAM, FUNK, CHIP, ORGANIC, DARK, CARIOCA, BOSSA, SAMBA and MPB. Each mood also has a demo beat and bass line. DICE changes one pad to a new sound in the same mood.
+- The KEYS screen shows a keyboard with the keys you play (orange) and the recorded notes that play back (blue), with a trail of recent notes.
 - A preset browser with more than 40 factory sounds. Save your own sounds as presets.
 - Each pad has a start and end point, pitch, an envelope, a filter, pan and a choke group.
 - Play modes: one shot, gate and loop.
