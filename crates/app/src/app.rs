@@ -29,6 +29,13 @@ pub enum View {
     Pad,
     Seq,
     Song,
+    Roll,
+}
+
+pub struct RollDrag {
+    pub note: Note,
+    pub resize: bool,
+    pub grab: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,6 +96,9 @@ pub struct App {
     pub octave: i8,
     pub rec_seq: bool,
     pub open_notes: Vec<OpenNote>,
+    pub roll_low: i8,
+    pub roll_scroll: f32,
+    pub roll_drag: Option<RollDrag>,
     pub capture: Capture,
     pub source: usize,
     pub sender: Sender,
@@ -135,6 +145,9 @@ impl App {
             octave: 0,
             rec_seq: false,
             open_notes: Vec::new(),
+            roll_low: -12,
+            roll_scroll: 0.0,
+            roll_drag: None,
             capture: Capture::default(),
             source: 0,
             sender: Sender::default(),
@@ -395,7 +408,7 @@ impl App {
         });
     }
 
-    fn clock(&self, group: usize) -> Option<(usize, f64, u32)> {
+    pub fn clock(&self, group: usize) -> Option<(usize, f64, u32)> {
         let out = self.output.as_ref()?;
         let timing = out.status.timing(group);
         let pattern = &self.project.groups[group].patterns[timing.pattern];
@@ -534,7 +547,11 @@ impl App {
     pub fn clear_steps(&mut self) {
         self.remember();
         let (g, i) = (self.group, self.editing());
-        self.project.groups[g].patterns[i].clear_pad(self.pad);
+        if self.view == View::Roll {
+            self.project.groups[g].patterns[i].clear_notes(self.pad);
+        } else {
+            self.project.groups[g].patterns[i].clear_pad(self.pad);
+        }
         self.sync_pattern(g, i);
         self.say(format!("cleared {}", self.pad_name(g, self.pad)));
     }

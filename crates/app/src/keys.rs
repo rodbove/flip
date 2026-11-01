@@ -45,7 +45,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("TAB", "keys mode (piano)"),
     ("A W S E ... K", "piano keys"),
     ("Z / X", "octave (keys mode)"),
-    ("5 / 6 / 7", "screen pad/seq/song"),
+    ("5 6 7 8", "screen pad/seq/song/roll"),
     ("SPACE", "play / stop"),
     ("ENTER", "record into pattern"),
     ("9 / 0", "record grid / quantize notes"),
@@ -210,6 +210,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             Key::Num5 => app.view = View::Pad,
             Key::Num6 => app.view = View::Seq,
             Key::Num7 => app.view = View::Song,
+            Key::Num8 => app.view = View::Roll,
             Key::Num9 => app.cycle_grid(),
             Key::Num0 => app.quantize_notes(),
             _ => {}

@@ -19,7 +19,7 @@ const SCROLL_RANGE: f32 = 800.0;
 const MARKER_START: usize = 10;
 const MARKER_END: usize = 11;
 
-struct L {
+pub(crate) struct L {
     o: Pos2,
     k: f32,
 }
@@ -33,16 +33,16 @@ impl L {
         pos2(self.o.x + x * self.k, self.o.y + y * self.k)
     }
 
-    fn f(&self, size: f32) -> FontId {
+    pub(crate) fn f(&self, size: f32) -> FontId {
         FontId::monospace(size * self.k)
     }
 
-    fn s(&self, v: f32) -> f32 {
+    pub(crate) fn s(&self, v: f32) -> f32 {
         v * self.k
     }
 }
 
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+pub(crate) fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let c = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
     Color32::from_rgb(c(a.r(), b.r()), c(a.g(), b.g()), c(a.b(), b.b()))
@@ -186,6 +186,7 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
             View::Pad => pad_view(app, ui, l, body),
             View::Seq => seq_view(app, ui, l, body),
             View::Song => song_view(app, ui, l, body),
+            View::Roll => crate::roll::view(app, ui, l, body),
         }
     }
     let painter = ui.painter();
@@ -263,7 +264,7 @@ fn top_bar(app: &mut App, ui: &Ui, l: &L, bar: Rect) {
         let x = bar.min.x + l.s(350.0);
         let rect = Rect::from_min_size(
             pos2(x, y - l.s(5.0) + ch as f32 * l.s(6.0)),
-            vec2(l.s(80.0), l.s(4.0)),
+            vec2(l.s(56.0), l.s(4.0)),
         );
         painter.rect_filled(rect, 0.0, SCREEN_FAINT);
         let level = app.meter[ch].clamp(0.0, 1.0);
@@ -272,11 +273,16 @@ fn top_bar(app: &mut App, ui: &Ui, l: &L, bar: Rect) {
         let color = if level > 0.95 { ORANGE } else { SCREEN_INK };
         painter.rect_filled(fill, 0.0, color);
     }
-    let tabs = [("PAD", View::Pad), ("SEQ", View::Seq), ("SONG", View::Song)];
+    let tabs = [
+        ("PAD", View::Pad),
+        ("SEQ", View::Seq),
+        ("SONG", View::Song),
+        ("ROLL", View::Roll),
+    ];
     for (i, (name, view)) in tabs.iter().enumerate() {
         let rect = Rect::from_center_size(
-            pos2(bar.max.x - l.s(130.0 - i as f32 * 44.0), y),
-            vec2(l.s(40.0), l.s(18.0)),
+            pos2(bar.max.x - l.s(152.0 - i as f32 * 38.0), y),
+            vec2(l.s(34.0), l.s(18.0)),
         );
         let resp = ui.interact(rect, Id::unique(("tab", i)), Sense::click());
         let on = app.view == *view && !app.help;
