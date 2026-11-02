@@ -54,6 +54,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("B", "sample (again: stop)"),
     ("M", "metronome"),
     ("T / TEMPO", "type bpm, T again to set"),
+    ("N / STEPS", "type loop steps, N again"),
     ("[ ]", "pattern -/+"),
     ("LEFT / RIGHT", "group -/+"),
     ("UP / DOWN", "tempo -/+"),
@@ -126,6 +127,19 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             continue;
         }
         if repeat {
+            continue;
+        }
+        if app.steps_entry.is_some() {
+            match code {
+                Key::Enter | Key::N => app.steps_key(),
+                Key::Escape => app.steps_cancel(),
+                Key::Backspace | Key::Delete => app.steps_back(),
+                _ => {
+                    if let Some(d) = digit(code) {
+                        app.steps_type(d);
+                    }
+                }
+            }
             continue;
         }
         if app.tempo_entry.is_some() {
@@ -202,6 +216,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             Key::Enter => app.toggle_rec(),
             Key::B => app.arm(),
             Key::T => app.tempo_key(),
+            Key::N => app.steps_key(),
             Key::M => app.toggle_metronome(),
             Key::Tab => {
                 let on = !app.keys;

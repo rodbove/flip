@@ -304,12 +304,17 @@ fn header(app: &mut App, ui: &Ui, l: &L) {
         }
     }
     lcd(app, ui, l, l.r(242.0, 30.0, 220.0, 54.0));
-    let tap = l.r(472.0, 38.0, 74.0, 38.0);
     let blink = (app.now * 3.0).fract() < 0.5;
+    let tap = l.r(472.0, 30.0, 74.0, 24.0);
     let typing = app.tempo_entry.is_some() && blink;
     if key(ui, l, "tempo", tap, "TEMPO", typing, true).clicked() {
         app.tempo_key();
         app.page = TEMPO_PAGE;
+    }
+    let steps = l.r(472.0, 60.0, 74.0, 24.0);
+    let typing = app.steps_entry.is_some() && blink;
+    if key(ui, l, "steps", steps, "STEPS", typing, true).clicked() {
+        app.steps_key();
     }
     let buttons = ["NEW", "OPEN", "SAVE", "EXPORT", "UNDO", "SETUP"];
     let w = (382.0 - 5.0 * 6.0) / 6.0;
@@ -376,8 +381,19 @@ fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
     let painter = ui.painter();
     painter.rect_filled(rect.expand(l.s(3.0)), l.s(8.0), KEY);
     painter.rect_filled(rect, l.s(5.0), SCREEN);
-    let tempo = match &app.tempo_entry {
-        Some(text) => {
+    let typed = |text: &String| {
+        let cursor = if (app.now * 3.0).fract() < 0.5 {
+            "_"
+        } else {
+            " "
+        };
+        let cursor = if text.len() < 3 { cursor } else { "" };
+        let used = text.len() + cursor.len();
+        format!("{}{text}{cursor}", " ".repeat(4usize.saturating_sub(used)))
+    };
+    let tempo = match (&app.steps_entry, &app.tempo_entry) {
+        (Some(text), _) => typed(text),
+        (None, Some(text)) => {
             let count = text.chars().filter(|c| c.is_ascii_digit()).count();
             let cursor = if (app.now * 3.0).fract() < 0.5 {
                 "_"
@@ -392,7 +408,7 @@ fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
             let used = count + cursor.len();
             format!("{}{text}{cursor}", " ".repeat(4usize.saturating_sub(used)))
         }
-        None => format!("{:05.1}", app.project.tempo.clamp(0.0, 999.9)),
+        (None, None) => format!("{:05.1}", app.project.tempo.clamp(0.0, 999.9)),
     };
     digits(
         painter,
@@ -406,7 +422,11 @@ fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
     painter.text(
         pos2(side, rect.min.y + l.s(12.0)),
         Align2::LEFT_CENTER,
-        "BPM",
+        if app.steps_entry.is_some() {
+            "STEPS"
+        } else {
+            "BPM"
+        },
         l.f(9.0),
         ORANGE,
     );
@@ -414,9 +434,10 @@ fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
         pos2(side, rect.min.y + l.s(27.0)),
         Align2::LEFT_CENTER,
         format!(
-            "{}{:02}",
+            "{}{:02} {:>3} ST",
             (b'A' + app.group as u8) as char,
-            app.editing() + 1
+            app.editing() + 1,
+            app.project.pattern(app.group).length
         ),
         l.f(9.0),
         SCREEN_INK,
@@ -824,14 +845,18 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
     let g = app.group;
     let index = app.editing();
     let length = app.steps_visible();
+    let window = (app.step_page / 4) * 64;
+    let shown = (length - window.min(length)).clamp(1, 64);
     let painter = ui.painter();
     painter.text(
         body.left_top(),
         Align2::LEFT_TOP,
         format!(
-            "PATTERN {}{:02}  {} STEPS  PAD {}",
+            "PATTERN {}{:02}  STEPS {}-{} OF {}  PAD {}",
             (b'A' + g as u8) as char,
             index + 1,
+            window + 1,
+            window + shown,
             length,
             app.pad_name(g, app.pad)
         ),
@@ -839,7 +864,7 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         SCREEN_INK,
     );
     let grid = Rect::from_min_max(body.min + vec2(l.s(22.0), l.s(20.0)), body.max);
-    let cw = grid.width() / length as f32;
+    let cw = grid.width() / shown as f32;
     let ch = grid.height() / PADS as f32;
     let playing = app.report.playing && app.report.current[g] == index;
     let now = (app.report.pos[g] + length - 1) % length;
@@ -860,11 +885,12 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
             l.f(8.0),
             if row == app.pad { ORANGE } else { SCREEN_DIM },
         );
-        for col in 0..length {
+        for col in 0..shown {
+            let at = window + col;
             let cell = Rect::from_min_size(pos2(grid.min.x + col as f32 * cw, y), vec2(cw, ch))
                 .shrink(l.s(1.0));
-            let s = pattern.step(row, col);
-            let beat = col % 4 == 0;
+            let s = pattern.step(row, at);
+            let beat = at.is_multiple_of(4);
             if s.on {
                 let color = mix(SCREEN_DIM, SCREEN_INK, s.velocity);
                 painter.rect_filled(cell, 1.0, color);
@@ -879,7 +905,7 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
                 let r = if beat { l.s(1.4) } else { l.s(0.8) };
                 painter.circle_filled(cell.center(), r, SCREEN_DIM);
             }
-            if row == app.pad && app.step == Some(col) {
+            if row == app.pad && app.step == Some(at) {
                 painter.rect_stroke(
                     cell,
                     1.0,
@@ -889,8 +915,8 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
             }
         }
     }
-    if playing {
-        let x = grid.min.x + now as f32 * cw;
+    if playing && now >= window && now < window + shown {
+        let x = grid.min.x + (now - window) as f32 * cw;
         painter.rect_stroke(
             Rect::from_min_size(pos2(x, grid.min.y), vec2(cw, grid.height())),
             0.0,
@@ -902,7 +928,7 @@ fn seq_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
     if let Some(pos) = resp.interact_pointer_pos()
         && (resp.clicked() || resp.secondary_clicked())
     {
-        let col = (((pos.x - grid.min.x) / cw) as usize).min(length - 1);
+        let col = window + (((pos.x - grid.min.x) / cw) as usize).min(shown - 1);
         let row = (((pos.y - grid.min.y) / ch) as usize).min(PADS - 1);
         app.select_pad(row);
         if resp.clicked() {
@@ -1706,27 +1732,36 @@ fn patterns(app: &mut App, ui: &Ui, l: &L) {
         }
     }
     let length = app.project.pattern(g).length;
-    let w = (382.0 - 3.0 * 6.0) / 4.0;
-    for p in 0..4 {
-        let rect = l.r(674.0 + p as f32 * (w + 6.0), 640.0, w, 26.0);
-        let label = format!("{}-{}", p * 16 + 1, p * 16 + 16);
-        let enabled = p * 16 < length;
-        let resp = key(
-            ui,
-            l,
-            ("steppage", p),
-            rect,
-            &label,
-            app.step_page == p,
-            true,
+    let pages = length.div_ceil(16).max(1);
+    app.step_page = app.step_page.min(pages - 1);
+    let prev = l.r(674.0, 640.0, 70.0, 26.0);
+    if key(ui, l, "stepprev", prev, "<", false, true).clicked() {
+        app.step_page = (app.step_page + pages - 1) % pages;
+    }
+    let next = l.r(986.0, 640.0, 70.0, 26.0);
+    if key(ui, l, "stepnext", next, ">", false, true).clicked() {
+        app.step_page = (app.step_page + 1) % pages;
+    }
+    let shown = l.r(750.0, 640.0, 230.0, 26.0);
+    let painter = ui.painter();
+    painter.rect_filled(shown, l.s(5.0), SCREEN);
+    let first = app.step_page * 16 + 1;
+    let last = (first + 15).min(length);
+    painter.text(
+        shown.center(),
+        Align2::CENTER_CENTER,
+        format!("STEPS {first}-{last} OF {length}"),
+        l.f(10.0),
+        ORANGE,
+    );
+    let dots = pages.min(16);
+    for p in 0..dots {
+        let c = pos2(
+            shown.min.x + l.s(10.0) + p as f32 * (shown.width() - l.s(20.0)) / 15.0,
+            shown.max.y - l.s(4.0),
         );
-        if !enabled {
-            ui.painter()
-                .rect_filled(rect, l.s(5.0), Color32::from_black_alpha(120));
-        }
-        if resp.clicked() && enabled {
-            app.step_page = p;
-        }
+        let lit = p == app.step_page;
+        painter.circle_filled(c, l.s(1.4), if lit { ORANGE } else { LCD_OFF });
     }
 }
 

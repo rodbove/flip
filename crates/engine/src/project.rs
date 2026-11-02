@@ -6,9 +6,10 @@ use crate::sample::Sample;
 
 pub const GROUPS: usize = 4;
 pub const PADS: usize = 16;
-pub const STEPS: usize = 64;
+pub const STEPS: usize = 256;
+pub const STRIDE: usize = 64;
 pub const PATTERNS: usize = 16;
-pub const LENGTHS: [usize; 4] = [16, 32, 48, 64];
+pub const LENGTHS: [usize; 11] = [8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256];
 pub const TICKS: u32 = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -318,23 +319,96 @@ impl Default for Pattern {
     fn default() -> Self {
         Self {
             length: 16,
-            steps: vec![Step::default(); PADS * STEPS],
+            steps: vec![Step::default(); PADS * STRIDE],
             notes: Vec::new(),
         }
     }
 }
 
 impl Pattern {
+    pub fn stride(&self) -> usize {
+        self.steps.len() / PADS
+    }
+
     pub fn step(&self, pad: usize, step: usize) -> &Step {
-        &self.steps[pad * STEPS + step]
+        static OFF: Step = Step {
+            on: false,
+            velocity: 0.8,
+            pitch: 0,
+            chance: 1.0,
+        };
+        let stride = self.stride();
+        if step < stride {
+            &self.steps[pad * stride + step]
+        } else {
+            &OFF
+        }
     }
 
     pub fn step_mut(&mut self, pad: usize, step: usize) -> &mut Step {
-        &mut self.steps[pad * STEPS + step]
+        self.reserve(step + 1);
+        let stride = self.stride();
+        &mut self.steps[pad * stride + step]
+    }
+
+    fn reserve(&mut self, steps: usize) {
+        let old = self.stride();
+        if steps <= old {
+            return;
+        }
+        let new = steps.next_multiple_of(STRIDE).min(STEPS);
+        let mut grown = vec![Step::default(); PADS * new];
+        for pad in 0..PADS {
+            grown[pad * new..pad * new + old]
+                .copy_from_slice(&self.steps[pad * old..(pad + 1) * old]);
+        }
+        self.steps = grown;
+    }
+
+    pub fn resize(&mut self, length: usize) {
+        let length = length.clamp(1, STEPS);
+        let old = self.length;
+        self.reserve(length);
+        if length > old && self.region_empty(old, length) {
+            for pad in 0..PADS {
+                for s in old..length {
+                    *self.step_mut(pad, s) = *self.step(pad, s % old);
+                }
+            }
+            let span = old as u32 * TICKS;
+            let end = length as u32 * TICKS;
+            let source: Vec<Note> = self
+                .notes
+                .iter()
+                .filter(|n| n.start < span)
+                .copied()
+                .collect();
+            let mut shift = span;
+            while shift < end {
+                for n in &source {
+                    if n.start + shift < end {
+                        self.notes.push(Note {
+                            start: n.start + shift,
+                            ..*n
+                        });
+                    }
+                }
+                shift += span;
+            }
+            self.notes.sort_by_key(|n| n.start);
+        }
+        self.length = length;
+    }
+
+    fn region_empty(&self, from: usize, to: usize) -> bool {
+        let steps = (0..PADS).all(|p| (from..to).all(|s| !self.step(p, s).on));
+        let (a, b) = (from as u32 * TICKS, to as u32 * TICKS);
+        steps && !self.notes.iter().any(|n| n.start >= a && n.start < b)
     }
 
     pub fn clear_pad(&mut self, pad: usize) {
-        for s in &mut self.steps[pad * STEPS..(pad + 1) * STEPS] {
+        let stride = self.stride();
+        for s in &mut self.steps[pad * stride..(pad + 1) * stride] {
             *s = Step::default();
         }
     }
@@ -568,6 +642,65 @@ mod tests {
             let json = r#"{"length":16,"notes":[],"clip":[{"pad":0,"start":9999,"length":5,"pitch":0,"velocity":1.0}]}"#;
             let back: Pattern = serde_json::from_str(json).unwrap();
             assert!(back.notes.is_empty());
+        }
+    }
+
+    mod when_making_a_pattern_longer {
+        use super::*;
+
+        fn beat() -> Pattern {
+            let mut p = Pattern::default();
+            p.step_mut(0, 0).on = true;
+            p.step_mut(2, 12).on = true;
+            p.notes.push(Note {
+                pad: 1,
+                start: 4 * TICKS,
+                length: TICKS,
+                pitch: 3,
+                velocity: 0.8,
+            });
+            p
+        }
+
+        #[test]
+        fn repeats_the_loop_into_the_new_bars() {
+            let mut p = beat();
+            p.resize(64);
+            assert_eq!(p.length, 64);
+            assert!(p.step(0, 48).on);
+            assert!(p.step(2, 60).on);
+            assert_eq!(p.notes.len(), 4);
+            assert_eq!(p.notes[3].start, (48 + 4) * TICKS);
+        }
+
+        #[test]
+        fn grows_past_the_first_storage_block() {
+            let mut p = beat();
+            p.resize(256);
+            assert!(p.stride() >= 256);
+            assert!(p.step(0, 240).on);
+            assert!(p.step(2, 252).on);
+        }
+
+        #[test]
+        fn keeps_hidden_steps_when_shrunk_and_grown_again() {
+            let mut p = beat();
+            p.resize(32);
+            p.step_mut(0, 16).on = false;
+            p.step_mut(3, 20).on = true;
+            p.resize(16);
+            p.resize(32);
+            assert!(p.step(3, 20).on);
+            assert!(!p.step(0, 16).on);
+        }
+
+        #[test]
+        fn saves_and_loads_long_patterns() {
+            let mut p = beat();
+            p.resize(200);
+            let back: Pattern = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+            assert_eq!(back.length, 200);
+            assert!(back.step(2, 188).on);
         }
     }
 

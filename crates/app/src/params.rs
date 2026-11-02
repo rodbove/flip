@@ -247,7 +247,7 @@ impl Param {
             Velocity => spec("VELOCITY", 0.0, 1.0, 0.8),
             StepPitch => spec("NOTE", -24.0, 24.0, 0.0),
             Chance => spec("CHANCE", 0.0, 1.0, 1.0),
-            Length => choice("LENGTH", 4, 0.0),
+            Length => choice("LENGTH", LENGTHS.len(), 2.0),
             Tempo => spec("TEMPO", 40.0, 240.0, 96.0),
             Swing => spec("SWING", 0.0, 1.0, 0.0),
             GroupVolume => spec("GROUP", 0.0, 1.0, 0.8),
@@ -459,7 +459,7 @@ impl Param {
                     format!("{i}")
                 }
             }
-            Length => format!("{}", LENGTHS[i.min(3)]),
+            Length => format!("{}", LENGTHS[i.min(LENGTHS.len() - 1)]),
             Tempo => format!("{v:.1}"),
             Threshold => format!("{:.0}%", v * 200.0),
             Capture => CAPTURES[i.min(CAPTURES.len() - 1)].into(),

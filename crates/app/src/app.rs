@@ -127,6 +127,7 @@ pub struct App {
     pub meter: [f32; 2],
     pub drag: Option<(usize, f32)>,
     pub tempo_entry: Option<String>,
+    pub steps_entry: Option<String>,
     pub keyboard: Keyboard,
     pub lists: Option<(Vec<String>, Vec<String>, Vec<String>)>,
     pub ctx: egui::Context,
@@ -178,6 +179,7 @@ impl App {
             meter: [0.0; 2],
             drag: None,
             tempo_entry: None,
+            steps_entry: None,
             keyboard: Keyboard::default(),
             lists: None,
             ctx,
@@ -408,7 +410,62 @@ impl App {
         }
     }
 
+    pub fn set_length(&mut self, length: usize) {
+        let (g, i) = (self.group, self.editing());
+        let pattern = &mut self.project.groups[g].patterns[i];
+        if pattern.length == length {
+            return;
+        }
+        pattern.resize(length);
+        self.step_page = self.step_page.min(length.div_ceil(16) - 1);
+        self.sync_pattern(g, i);
+    }
+
+    pub fn steps_key(&mut self) {
+        self.tempo_entry = None;
+        match self.steps_entry.take() {
+            None => {
+                self.steps_entry = Some(String::new());
+                self.say("type steps (1-256), then STEPS again");
+            }
+            Some(text) => match text.parse::<usize>() {
+                Ok(n) if (1..=STEPS).contains(&n) => {
+                    self.remember();
+                    self.set_length(n);
+                    self.say(format!(
+                        "{}{:02} is {n} steps",
+                        (b'A' + self.group as u8) as char,
+                        self.editing() + 1
+                    ));
+                }
+                _ => self.say("steps unchanged"),
+            },
+        }
+    }
+
+    pub fn steps_type(&mut self, c: char) {
+        if let Some(text) = self.steps_entry.as_mut()
+            && c.is_ascii_digit()
+            && text.len() < 3
+        {
+            text.push(c);
+        }
+    }
+
+    pub fn steps_back(&mut self) {
+        if let Some(text) = self.steps_entry.as_mut() {
+            text.pop();
+        }
+    }
+
+    pub fn steps_cancel(&mut self) {
+        if self.steps_entry.take().is_some() {
+            self.say("steps unchanged");
+        }
+    }
+
     pub fn tempo_key(&mut self) {
+        self.steps_entry = None;
         match self.tempo_entry.take() {
             None => {
                 self.tempo_entry = Some(String::new());
@@ -708,11 +765,8 @@ impl App {
             }
             Target::Global => match p {
                 Param::Length => {
-                    let i = self.editing();
-                    let length = LENGTHS[(v.round() as usize).min(3)];
-                    self.project.groups[g].patterns[i].length = length;
-                    self.step_page = self.step_page.min(length / 16 - 1);
-                    self.sync_pattern(g, i);
+                    let length = LENGTHS[(v.round() as usize).min(LENGTHS.len() - 1)];
+                    self.set_length(length);
                 }
                 Param::Tempo => {
                     self.project.tempo = v;

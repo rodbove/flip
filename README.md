@@ -11,7 +11,7 @@ A pad sampler and synthesizer that runs on your computer. Record sounds, chop th
 - A preset browser with more than 40 factory sounds. Save your own sounds as presets.
 - Each pad has a start and end point, pitch, an envelope, a filter, pan and a choke group.
 - Play modes: one shot, gate and loop.
-- 16 patterns for each group. Each pattern has up to 64 steps.
+- 16 patterns for each group. Each pattern has 1 to 256 steps (up to 16 bars). When a pattern gets longer, its loop repeats into the new bars.
 - Each step has a velocity, a note and a chance to play.
 - Each pattern also keeps recorded notes with a start, a length and a velocity. Record chords and held notes from a MIDI keyboard, then edit them in the roll.
 - A song mode chains patterns.
@@ -64,6 +64,7 @@ The keys work by position, so all keyboard layouts use the same keys. The table 
 | B | Start or stop a sample recording |
 | M | Metronome |
 | T or TEMPO | Type a BPM, then press again to set it |
+| N or STEPS | Type the number of steps of the pattern (1 to 256), then press again to set it |
 | [ / ] | Previous / next pattern |
 | Left / Right | Previous / next group |
 | Up / Down | Tempo |

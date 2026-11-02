@@ -1,6 +1,8 @@
 use crate::dsp::Rng;
 use crate::preset::{self, amp, analog, fm, morph, op, string};
-use crate::project::{Filter, GROUPS, Mode, PADS, Pad, Project, STEPS, Source, Step, Synth, Wave};
+use crate::project::{
+    Filter, GROUPS, Mode, PADS, Pad, Pattern, Project, Source, Step, Synth, Wave,
+};
 
 const DRUMS: usize = 0;
 const BASS: usize = 1;
@@ -874,10 +876,7 @@ pub fn beat(project: &mut Project, index: usize, pattern: usize) {
     project.tempo = mood.tempo;
     project.swing = mood.swing;
     for g in [DRUMS, BASS] {
-        let p = &mut project.groups[g].patterns[pattern];
-        p.length = 16;
-        p.steps = vec![Step::default(); PADS * STEPS];
-        p.notes.clear();
+        project.groups[g].patterns[pattern] = Pattern::default();
     }
     let drums = &mut project.groups[DRUMS].patterns[pattern];
     for (pad, row) in mood.beat {
