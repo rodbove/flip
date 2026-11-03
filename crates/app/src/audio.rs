@@ -6,7 +6,7 @@ use flip_engine::{Command, Project, Runner, Status, Trash};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 const SCRATCH: usize = 8192;
-const INPUT_SECONDS: usize = 4;
+pub const INPUT_SECONDS: usize = 4;
 
 #[derive(Clone, Default)]
 pub struct Sender(Arc<Mutex<Option<Producer<Command>>>>);
@@ -20,7 +20,7 @@ impl Sender {
         }
     }
 
-    fn replace(&self, producer: Producer<Command>) {
+    pub(crate) fn replace(&self, producer: Producer<Command>) {
         if let Ok(mut slot) = self.0.lock() {
             *slot = Some(producer);
         }
@@ -33,14 +33,14 @@ pub struct Output {
     pub status: Arc<Status>,
     pub trash: Consumer<Trash>,
     pub tap: Consumer<[f32; 2]>,
-    _stream: cpal::Stream,
+    pub(crate) _stream: Box<dyn std::any::Any>,
 }
 
 pub struct Input {
     pub rate: u32,
     pub device: String,
     pub frames: Consumer<[f32; 2]>,
-    _stream: cpal::Stream,
+    pub(crate) _stream: Box<dyn std::any::Any>,
 }
 
 impl Input {
@@ -49,22 +49,48 @@ impl Input {
     }
 }
 
+fn alsa_id(device: &cpal::Device) -> Option<String> {
+    let id = device.id().ok()?.to_string();
+    id.strip_prefix("alsa:").map(str::to_string)
+}
+
+fn listed(device: &cpal::Device) -> bool {
+    match alsa_id(device) {
+        Some(id) => id == "pipewire" || id == "default" || id.starts_with("hw:"),
+        None => true,
+    }
+}
+
 fn name(device: &cpal::Device) -> String {
-    device
+    let base = device
         .description()
         .map(|d| d.name().to_string())
-        .unwrap_or_else(|_| "unknown".into())
+        .unwrap_or_else(|_| "unknown".into());
+    match alsa_id(device) {
+        Some(id) if id.starts_with("hw:") => format!("{base} ({id})"),
+        _ => base,
+    }
 }
 
 pub fn names(input: bool) -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    if let Some(n) = crate::jack_audio::names(input) {
+        return n;
+    }
     let host = cpal::default_host();
     let devices = if input {
         host.input_devices().map(|d| d.collect::<Vec<_>>())
     } else {
         host.output_devices().map(|d| d.collect::<Vec<_>>())
     };
-    let mut out: Vec<String> = devices.unwrap_or_default().iter().map(name).collect();
-    out.dedup();
+    let mut seen = std::collections::HashSet::new();
+    let out: Vec<String> = devices
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| listed(d))
+        .map(name)
+        .filter(|n| seen.insert(n.clone()))
+        .collect();
     out
 }
 
@@ -79,7 +105,7 @@ fn find(wanted: Option<&str>, input: bool) -> Option<cpal::Device> {
         if let Some(d) = devices
             .unwrap_or_default()
             .into_iter()
-            .find(|d| name(d) == w)
+            .find(|d| listed(d) && name(d) == w)
         {
             return Some(d);
         }
@@ -96,6 +122,10 @@ pub fn open_output(
     wanted: Option<&str>,
     sender: &Sender,
 ) -> Result<Output, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(client) = crate::jack_audio::client("flip") {
+        return crate::jack_audio::open_output(client, project, wanted, sender);
+    }
     let device = find(wanted, false).ok_or("no output device")?;
     let supported = device.default_output_config().map_err(|e| e.to_string())?;
     let config = supported.config();
@@ -117,7 +147,7 @@ pub fn open_output(
         status: remote.status,
         trash: remote.trash,
         tap: remote.tap,
-        _stream: stream,
+        _stream: Box::new(stream),
     })
 }
 
@@ -150,6 +180,10 @@ where
 }
 
 pub fn open_input(wanted: Option<&str>) -> Result<Input, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(client) = crate::jack_audio::client("flip-in") {
+        return crate::jack_audio::open_input(client, wanted);
+    }
     let device = find(wanted, true).ok_or("no input device")?;
     let supported = device.default_input_config().map_err(|e| e.to_string())?;
     let config = supported.config();
@@ -168,7 +202,7 @@ pub fn open_input(wanted: Option<&str>) -> Result<Input, String> {
         rate,
         device: name(&device),
         frames: consumer,
-        _stream: stream,
+        _stream: Box::new(stream),
     })
 }
 

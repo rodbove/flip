@@ -40,6 +40,22 @@ On macOS:
 
 The script builds the app and copies `Flip.app` to `/Applications`. If that folder is not writable, it uses `~/Applications`.
 
+On Linux (Arch example, PipeWire desktop):
+
+1. Install Rust and the build packages: `sudo pacman -S rustup base-devel alsa-lib pipewire-jack realtime-privileges`.
+2. Add your user to the realtime group: `sudo usermod -aG realtime $USER`.
+3. Log out and log in again.
+4. Run `./scripts/install.sh`.
+5. Open Flip from the app menu, or run `flip`.
+
+The script installs `~/.local/bin/flip` and a menu entry. Flip plays through PipeWire's JACK layer with a 256-sample buffer. Without `pipewire-jack`, Flip uses ALSA.
+
+When you do not select a device, Flip uses the PipeWire default output and input. Select a device in SETUP to use a different one.
+
+If Flip shows "the desktop portal grants no realtime time", log out and log in again, or run `systemctl --user restart xdg-desktop-portal`.
+
+On a tiling window manager, make the window float. For xmonad, add `className =? "flip" --> doFloat` to the manage hook.
+
 ## Run from source
 
 Run `cargo run --release`.
@@ -50,7 +66,7 @@ To save a screenshot, set `FLIP_SHOT` to a `.tga` path. Set `FLIP_MOOD` to load 
 
 Flip has no window frame. It looks like a device on your desktop.
 
-- Drag an empty part of the body to move it.
+- Drag an empty part of the body to move it. Some X11 window managers, such as xmonad, ignore this. Use the window manager's move key instead (for example Mod and drag).
 - Drag the ridges in the bottom-right corner to resize it.
 - Push HIDE to minimize it. Push OFF to quit.
 
@@ -127,4 +143,4 @@ Presets save to `~/Music/Flip/presets` as JSON files. A preset keeps the sound o
 
 ## Projects
 
-A project is a folder. It contains `project.json` and a `samples` folder with WAV files. Projects save to `~/Music/Flip` by default.
+A project is a folder. It contains `project.json` and a `samples` folder with WAV files. Projects save to `~/Music/Flip` by default. On Linux, Flip uses your XDG music folder.

@@ -137,6 +137,7 @@ pub fn live(project: Project, rate: u32) -> (Runner, Remote) {
 
 impl Runner {
     pub fn process(&mut self, out: &mut [f32], channels: usize) {
+        let _ftz = crate::denormal::NoDenormals::new();
         while let Ok(command) = self.commands.pop() {
             self.engine.handle(command);
         }

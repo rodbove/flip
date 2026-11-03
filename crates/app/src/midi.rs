@@ -158,6 +158,13 @@ pub fn ports() -> Vec<String> {
         .collect()
 }
 
+pub fn wanted(ports: &[String]) -> Option<String> {
+    ports
+        .iter()
+        .find(|p| !p.starts_with("Midi Through"))
+        .cloned()
+}
+
 impl Midi {
     pub fn connect(
         &mut self,
@@ -228,6 +235,20 @@ impl Midi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod when_choosing_a_port_on_start {
+        use super::*;
+
+        #[test]
+        fn skips_the_linux_through_port() {
+            let ports = vec![
+                "Midi Through:Midi Through Port-0 14:0".to_string(),
+                "Digital Keyboard:Digital Keyboard MIDI 1 20:0".to_string(),
+            ];
+            assert_eq!(wanted(&ports), Some(ports[1].clone()));
+            assert_eq!(wanted(&ports[..1]), None);
+        }
+    }
 
     mod when_mapping_pad_notes {
         use super::*;

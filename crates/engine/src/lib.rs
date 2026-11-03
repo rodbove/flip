@@ -1,4 +1,5 @@
 pub mod chop;
+pub mod denormal;
 pub mod dsp;
 pub mod engine;
 pub mod kit;

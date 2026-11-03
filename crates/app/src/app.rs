@@ -210,7 +210,7 @@ impl App {
             .settings
             .midi
             .clone()
-            .or_else(|| midi::ports().into_iter().next());
+            .or_else(|| midi::wanted(&midi::ports()));
         if let Some(port) = wanted {
             app.connect_midi(&port);
         }

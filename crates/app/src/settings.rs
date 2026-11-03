@@ -49,8 +49,37 @@ fn dir() -> PathBuf {
     }
 }
 
+fn music() -> PathBuf {
+    if !cfg!(target_os = "macos") {
+        let file = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".config"))
+            .join("user-dirs.dirs");
+        if let Some(dir) = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| xdg_music(&t, &home()))
+        {
+            return dir;
+        }
+    }
+    home().join("Music")
+}
+
+fn xdg_music(text: &str, home: &std::path::Path) -> Option<PathBuf> {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("XDG_MUSIC_DIR="))?;
+    let value = line["XDG_MUSIC_DIR=".len()..].trim_matches('"');
+    let path = match value.strip_prefix("$HOME") {
+        Some(rest) => home.join(rest.trim_start_matches('/')),
+        None => PathBuf::from(value),
+    };
+    (path.is_absolute() && path != home).then_some(path)
+}
+
 pub fn projects() -> PathBuf {
-    home().join("Music/Flip")
+    music().join("Flip")
 }
 
 pub fn factory() -> PathBuf {
@@ -81,5 +110,51 @@ impl Settings {
     pub fn learn(&mut self, cc: u8, param: Param) {
         self.learned.retain(|(c, p)| *c != cc && *p != param);
         self.learned.push((cc, param));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod when_reading_the_music_folder {
+        use super::*;
+
+        fn home() -> PathBuf {
+            PathBuf::from("/home/me")
+        }
+
+        mod with_a_home_relative_path {
+            use super::*;
+
+            #[test]
+            fn joins_it_to_home() {
+                let text = "# comment\nXDG_MUSIC_DIR=\"$HOME/Musik\"\n";
+                assert_eq!(xdg_music(text, &home()), Some(home().join("Musik")));
+            }
+        }
+
+        mod with_an_absolute_path {
+            use super::*;
+
+            #[test]
+            fn uses_it() {
+                let text = "XDG_MUSIC_DIR=\"/data/music\"";
+                assert_eq!(xdg_music(text, &home()), Some(PathBuf::from("/data/music")));
+            }
+        }
+
+        mod with_the_folder_turned_off {
+            use super::*;
+
+            #[test]
+            fn falls_back() {
+                assert_eq!(xdg_music("XDG_MUSIC_DIR=\"$HOME/\"", &home()), None);
+                assert_eq!(
+                    xdg_music("XDG_DESKTOP_DIR=\"$HOME/Desktop\"", &home()),
+                    None
+                );
+            }
+        }
     }
 }

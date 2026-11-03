@@ -758,6 +758,7 @@ pub enum Bounce {
 }
 
 pub fn bounce(project: &Project, rate: u32, what: Bounce, tail: f32) -> Vec<[f32; 2]> {
+    let _ftz = crate::denormal::NoDenormals::new();
     let mut project = project.clone();
     project.metronome = false;
     project.song_mode = what == Bounce::Song;
