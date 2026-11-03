@@ -4,6 +4,7 @@ pub mod engine;
 pub mod kit;
 pub mod live;
 pub mod mood;
+pub mod pak;
 pub mod preset;
 pub mod project;
 pub mod sample;

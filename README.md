@@ -7,6 +7,7 @@ A pad sampler and synthesizer that runs on your computer. Record sounds, chop th
 - 4 groups (A to D) of 16 pads.
 - Each pad plays a sample or a synth engine: ANALOG (two oscillators), FM (four operators, eight algorithms), STRING (plucked or bowed string) or MORPH (a wave that morphs from sine to square, with unison).
 - 12 moods load a full set of sounds into the 4 groups: DUSTY, CLUB, TRAP, DREAM, FUNK, CHIP, ORGANIC, DARK, CARIOCA, BOSSA, SAMBA and MPB. Each mood also has a demo beat and bass line. DICE changes one pad to a new sound in the same mood.
+- The KO screen imports the EP-133 KO II factory pack (a `.pak` file from teenage engineering). It loads the 5 factory kits and lets you browse the 309 factory sounds by category.
 - The KEYS screen shows a keyboard with the keys you play (orange) and the recorded notes that play back (blue), with a trail of recent notes.
 - A preset browser with more than 40 factory sounds. Save your own sounds as presets.
 - Each pad has a start and end point, pitch, an envelope, a filter, pan and a choke group.
@@ -101,6 +102,18 @@ Mouse:
 2. Open SETUP and select the keyboard as the MIDI port.
 3. Turn the keyboard volume down, or set Local Control off, so you hear only Flip.
 4. Push Tab for keys mode, so all keys play the selected pad.
+
+## KO II factory pack
+
+Flip does not include the KO II sounds. Import them from your own copy of the factory pack.
+
+1. Download the factory pack (`ep-133-factory-content-*.pak`) from the teenage engineering EP sample tool.
+2. Open the KO screen.
+3. Click IMPORT FROM DOWNLOADS. If the file is in a different folder, click CHOOSE .PAK.
+4. Click a kit to load it: A gets drums, B gets bass and C gets melodic sounds. D stays empty, as on the device.
+5. Select a category and click a sound to load it into the selected pad.
+
+The import copies the sounds to `~/Music/Flip/Factory`. Each kit keeps the KO II layout of 12 pads in 3 columns, so the right column of each group stays empty.
 
 ## Presets
 

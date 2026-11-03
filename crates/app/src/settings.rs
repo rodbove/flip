@@ -53,6 +53,10 @@ pub fn projects() -> PathBuf {
     home().join("Music/Flip")
 }
 
+pub fn factory() -> PathBuf {
+    projects().join("Factory")
+}
+
 impl Settings {
     pub fn load() -> Self {
         std::fs::read_to_string(dir().join("settings.json"))

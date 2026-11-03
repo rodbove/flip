@@ -7,7 +7,7 @@ use eframe::egui;
 use flip_engine::project::LENGTHS;
 use flip_engine::{
     Bounce, Command, GROUPS, Note, PADS, Pad, Project, Report, STEPS, Sample, Source, Step, TICKS,
-    Tap, chop, mood, sample, store,
+    Tap, chop, mood, pak, sample, store,
 };
 
 use crate::audio::{self, Input, Output, Sender};
@@ -34,6 +34,7 @@ pub enum View {
     Roll,
     Keys,
     Mood,
+    Ko,
 }
 
 pub struct RollDrag {
@@ -130,6 +131,10 @@ pub struct App {
     pub steps_entry: Option<String>,
     pub keyboard: Keyboard,
     pub lists: Option<(Vec<String>, Vec<String>, Vec<String>)>,
+    pub factory: Option<pak::Factory>,
+    pub ko_category: usize,
+    pub ko_page: usize,
+    pub ko_scroll: f32,
     pub ctx: egui::Context,
     title: String,
 }
@@ -182,6 +187,10 @@ impl App {
             steps_entry: None,
             keyboard: Keyboard::default(),
             lists: None,
+            factory: pak::open(&crate::settings::factory()),
+            ko_category: 0,
+            ko_page: 0,
+            ko_scroll: 0.0,
             ctx,
             title: String::new(),
         };
@@ -1157,6 +1166,72 @@ impl App {
                 }
                 Err(e) => self.say(format!("{}: {e}", file_name(&path))),
             }
+        }
+    }
+
+    pub fn import_factory(&mut self, pick: bool) {
+        let found = if pick {
+            None
+        } else {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .and_then(|h| pak::find_pak(&h.join("Downloads")))
+        };
+        let Some(path) = found.or_else(|| {
+            rfd::FileDialog::new()
+                .set_title("Import EP-133 factory pak")
+                .add_filter("pak", &["pak"])
+                .pick_file()
+        }) else {
+            return;
+        };
+        match pak::install(&path, &crate::settings::factory()) {
+            Ok(f) => {
+                self.say(format!(
+                    "imported {} sounds, {} kits",
+                    f.sounds.len(),
+                    f.kits.len()
+                ));
+                self.factory = Some(f);
+            }
+            Err(e) => self.say(format!("import failed: {e}")),
+        }
+    }
+
+    pub fn load_kit(&mut self, index: usize) {
+        let Some(factory) = &self.factory else {
+            return;
+        };
+        let name = factory.kits[index].name.clone();
+        let tempo = factory.kits[index].tempo;
+        match factory.kit_pads(index) {
+            Ok(groups) => {
+                self.remember();
+                for (g, pads) in groups.into_iter().enumerate() {
+                    self.project.groups[g].pads = pads;
+                }
+                if let Some(t) = tempo {
+                    self.project.tempo = t;
+                }
+                self.project.mood = String::new();
+                self.sync_all();
+                self.say(format!("{name} loaded: A drums, B bass, C melodic"));
+            }
+            Err(e) => self.say(format!("kit failed: {e}")),
+        }
+    }
+
+    pub fn load_sound(&mut self, number: u16) {
+        let Some(factory) = &self.factory else {
+            return;
+        };
+        match factory.load(number) {
+            Ok(s) => {
+                let (g, p) = (self.group, self.pad);
+                self.place(g, p, s);
+                self.press(g, p, 0, 0.85, false, false);
+            }
+            Err(e) => self.say(format!("sound failed: {e}")),
         }
     }
 

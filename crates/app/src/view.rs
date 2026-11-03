@@ -20,6 +20,7 @@ const FINE: f32 = 6.0;
 const SCROLL_RANGE: f32 = 800.0;
 const MARKER_START: usize = 10;
 const MARKER_END: usize = 11;
+const KO_SCROLL: f32 = 60.0;
 
 pub(crate) struct L {
     o: Pos2,
@@ -522,6 +523,7 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
             View::Roll => crate::roll::view(app, ui, l, body),
             View::Keys => crate::keyview::view(app, ui, l, body),
             View::Mood => mood_view(app, ui, l, body),
+            View::Ko => ko_view(app, ui, l, body),
         }
     }
     let painter = ui.painter();
@@ -608,10 +610,11 @@ fn top_bar(app: &mut App, ui: &Ui, l: &L, bar: Rect) {
         ("ROLL", View::Roll),
         ("KEYS", View::Keys),
         ("MOOD", View::Mood),
+        ("KO", View::Ko),
     ];
     for (i, (name, view)) in tabs.iter().enumerate() {
         let rect = Rect::from_center_size(
-            pos2(bar.max.x - l.s(230.0 - i as f32 * 40.0), y),
+            pos2(bar.max.x - l.s(270.0 - i as f32 * 40.0), y),
             vec2(l.s(36.0), l.s(18.0)),
         );
         let resp = ui.interact(rect, Id::unique(("tab", i)), Sense::click());
@@ -1048,6 +1051,192 @@ fn mood_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         l.f(9.0),
         SCREEN_DIM,
     );
+}
+
+fn outline(ui: &Ui, l: &L, rect: Rect, on: bool, hovered: bool) -> (Color32, Color32) {
+    let painter = ui.painter();
+    if on {
+        painter.rect_filled(rect, l.s(3.0), ORANGE);
+        return (SCREEN, SCREEN);
+    }
+    painter.rect_stroke(
+        rect,
+        l.s(3.0),
+        Stroke::new(l.s(1.0), if hovered { SCREEN_INK } else { SCREEN_DIM }),
+        StrokeKind::Inside,
+    );
+    (SCREEN_INK, SCREEN_DIM)
+}
+
+fn ko_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
+    use flip_engine::pak::CATEGORIES;
+    ui.painter().text(
+        body.left_top(),
+        Align2::LEFT_TOP,
+        "KO-II",
+        l.f(11.0),
+        SCREEN_INK,
+    );
+    let Some(factory) = &app.factory else {
+        ui.painter().text(
+            body.center() - vec2(0.0, l.s(20.0)),
+            Align2::CENTER_CENTER,
+            "factory pack not imported",
+            l.f(11.0),
+            SCREEN_DIM,
+        );
+        let labels = ["IMPORT FROM DOWNLOADS", "CHOOSE .PAK"];
+        for (i, label) in labels.iter().enumerate() {
+            let rect = Rect::from_center_size(
+                body.center() + vec2((i as f32 - 0.5) * l.s(170.0), l.s(10.0)),
+                vec2(l.s(160.0), l.s(22.0)),
+            );
+            let resp = ui.interact(rect, Id::unique(("ko-import", i)), Sense::click());
+            let (ink, _) = outline(ui, l, rect, false, resp.hovered());
+            ui.painter()
+                .text(rect.center(), Align2::CENTER_CENTER, *label, l.f(10.0), ink);
+            if resp.clicked() {
+                app.import_factory(i == 1);
+            }
+        }
+        return;
+    };
+    ui.painter().text(
+        body.left_top() + vec2(l.s(44.0), 0.0),
+        Align2::LEFT_TOP,
+        "kits load A drums, B bass, C melodic  /  sounds load into the selected pad",
+        l.f(10.0),
+        SCREEN_DIM,
+    );
+    let kit_h = l.s(26.0);
+    let top = body.min.y + l.s(18.0);
+    let kits = factory.kits.len().max(1);
+    let gap = l.s(6.0);
+    let kit_w = (body.width() - gap * (kits - 1) as f32) / kits as f32;
+    let mut load_kit = None;
+    for (i, kit) in factory.kits.iter().enumerate() {
+        let rect = Rect::from_min_size(
+            pos2(body.min.x + i as f32 * (kit_w + gap), top),
+            vec2(kit_w, kit_h),
+        );
+        let resp = ui.interact(rect, Id::unique(("ko-kit", i)), Sense::click());
+        let (ink, _) = outline(ui, l, rect, false, resp.hovered());
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            format!("KIT {}", kit.name),
+            l.f(11.0),
+            ink,
+        );
+        if resp.clicked() {
+            load_kit = Some(i);
+        }
+    }
+    let tab_y = top + kit_h + l.s(8.0);
+    let tab_h = l.s(18.0);
+    let tab_w = body.width() / CATEGORIES.len() as f32;
+    let mut pick = None;
+    for (i, name) in CATEGORIES.iter().enumerate() {
+        let rect = Rect::from_min_size(
+            pos2(body.min.x + i as f32 * tab_w, tab_y),
+            vec2(tab_w, tab_h),
+        );
+        let resp = ui.interact(rect, Id::unique(("ko-tab", i)), Sense::click());
+        let on = app.ko_category == i;
+        if on {
+            ui.painter()
+                .rect_filled(rect.shrink(l.s(1.0)), l.s(3.0), SCREEN_FAINT);
+        }
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            *name,
+            l.f(9.0),
+            if on { ORANGE } else { SCREEN_DIM },
+        );
+        if resp.clicked() {
+            pick = Some(i);
+        }
+    }
+    let list = Rect::from_min_max(pos2(body.min.x, tab_y + tab_h + l.s(6.0)), body.max);
+    let sounds: Vec<(u16, String)> = factory
+        .in_category(app.ko_category)
+        .iter()
+        .map(|s| (s.number, s.name.clone()))
+        .collect();
+    let row_h = l.s(18.0);
+    let rows = ((list.height() / row_h).floor() as usize).max(1);
+    let columns = 4;
+    let per_page = rows * columns;
+    let pages = sounds.len().div_ceil(per_page).max(1);
+    let resp = ui.interact(list, Id::unique("ko-list"), Sense::hover());
+    if resp.hovered() {
+        app.ko_scroll += ui.input(|i| i.smooth_scroll_delta.y);
+        while app.ko_scroll.abs() >= KO_SCROLL {
+            if app.ko_scroll < 0.0 {
+                app.ko_page = (app.ko_page + 1).min(pages - 1);
+                app.ko_scroll += KO_SCROLL;
+            } else {
+                app.ko_page = app.ko_page.saturating_sub(1);
+                app.ko_scroll -= KO_SCROLL;
+            }
+        }
+    }
+    let page = app.ko_page.min(pages - 1);
+    let col_w = list.width() / columns as f32;
+    let mut load_sound = None;
+    for (n, (number, name)) in sounds
+        .iter()
+        .enumerate()
+        .skip(page * per_page)
+        .take(per_page)
+    {
+        let k = n - page * per_page;
+        let rect = Rect::from_min_size(
+            list.min + vec2((k / rows) as f32 * col_w, (k % rows) as f32 * row_h),
+            vec2(col_w - l.s(6.0), row_h - l.s(2.0)),
+        );
+        let resp = ui.interact(rect, Id::unique(("ko-sound", *number)), Sense::click());
+        if resp.hovered() {
+            ui.painter().rect_filled(rect, l.s(3.0), SCREEN_FAINT);
+        }
+        ui.painter().text(
+            rect.left_center() + vec2(l.s(6.0), 0.0),
+            Align2::LEFT_CENTER,
+            format!("{number:03}"),
+            l.f(9.0),
+            SCREEN_DIM,
+        );
+        ui.painter().text(
+            rect.left_center() + vec2(l.s(32.0), 0.0),
+            Align2::LEFT_CENTER,
+            name.to_uppercase(),
+            l.f(10.0),
+            if resp.hovered() { ORANGE } else { SCREEN_INK },
+        );
+        if resp.clicked() {
+            load_sound = Some(*number);
+        }
+    }
+    if pages > 1 {
+        ui.painter().text(
+            pos2(body.max.x, body.min.y),
+            Align2::RIGHT_TOP,
+            format!("PAGE {}/{}  scroll for more", page + 1, pages),
+            l.f(9.0),
+            SCREEN_DIM,
+        );
+    }
+    if let Some(i) = pick {
+        app.ko_category = i;
+        app.ko_page = 0;
+    }
+    if let Some(i) = load_kit {
+        app.load_kit(i);
+    }
+    if let Some(n) = load_sound {
+        app.load_sound(n);
+    }
 }
 
 fn song_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
