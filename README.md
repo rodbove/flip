@@ -2,6 +2,10 @@
 
 A pad sampler and synthesizer that runs on your computer. Record sounds, chop them, play them on pads and make loops with a step sequencer.
 
+![Flip with the SAMBA mood loaded](docs/img/flip.png)
+
+Read the tutorial at https://rodbove.github.io/flip/.
+
 ## Features
 
 - 4 groups (A to D) of 16 pads.
@@ -39,6 +43,8 @@ The script builds the app and copies `Flip.app` to `/Applications`. If that fold
 ## Run from source
 
 Run `cargo run --release`.
+
+To save a screenshot, set `FLIP_SHOT` to a `.tga` path. Set `FLIP_MOOD` to load a mood and its beat first, for example `FLIP_SHOT=shot.tga FLIP_MOOD=samba cargo run --release`.
 
 ## Window
 
