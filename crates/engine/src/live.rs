@@ -10,6 +10,7 @@ const COMMANDS: usize = 1024;
 const TRASH: usize = 1024;
 const BLOCK: usize = 4096;
 const TAP_SECONDS: usize = 4;
+const MONITOR_SLACK: f64 = 0.02;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Timing {
@@ -97,8 +98,76 @@ impl Status {
     }
 }
 
+struct Monitor {
+    input: Option<Consumer<[f32; 2]>>,
+    gain: f32,
+    step: f64,
+    pos: f64,
+    prev: [f32; 2],
+    next: [f32; 2],
+    slack: usize,
+}
+
+impl Monitor {
+    fn new() -> Self {
+        Self {
+            input: None,
+            gain: 0.0,
+            step: 1.0,
+            pos: 0.0,
+            prev: [0.0; 2],
+            next: [0.0; 2],
+            slack: 0,
+        }
+    }
+
+    fn listen(
+        &mut self,
+        input: Option<Consumer<[f32; 2]>>,
+        rate: u32,
+        output: u32,
+    ) -> Option<Consumer<[f32; 2]>> {
+        self.step = rate.max(1) as f64 / output.max(1) as f64;
+        self.slack = (rate as f64 * MONITOR_SLACK) as usize;
+        self.pos = 0.0;
+        self.prev = [0.0; 2];
+        self.next = [0.0; 2];
+        std::mem::replace(&mut self.input, input)
+    }
+
+    fn mix(&mut self, block: &mut [[f32; 2]]) {
+        let Some(input) = self.input.as_mut() else {
+            return;
+        };
+        let needed = (block.len() as f64 * self.step).ceil() as usize;
+        let excess = input.slots().saturating_sub(needed + self.slack);
+        if excess > 0
+            && let Ok(chunk) = input.read_chunk(excess)
+        {
+            chunk.commit_all();
+        }
+        if self.gain <= 0.0 {
+            return;
+        }
+        for frame in block.iter_mut() {
+            self.pos += self.step;
+            while self.pos >= 1.0 {
+                self.pos -= 1.0;
+                self.prev = self.next;
+                self.next = input.pop().unwrap_or([0.0; 2]);
+            }
+            let t = self.pos as f32;
+            for (out, (a, b)) in frame.iter_mut().zip(self.prev.iter().zip(self.next)) {
+                *out += (a + (b - a) * t) * self.gain;
+            }
+        }
+    }
+}
+
 pub struct Runner {
     engine: Engine,
+    monitor: Monitor,
+    rate: u32,
     commands: Consumer<Command>,
     trash: Producer<Trash>,
     tap: Producer<[f32; 2]>,
@@ -120,6 +189,8 @@ pub fn live(project: Project, rate: u32) -> (Runner, Remote) {
     let status = Arc::new(Status::default());
     let runner = Runner {
         engine: Engine::new(project, rate),
+        monitor: Monitor::new(),
+        rate,
         commands: cc,
         trash: tp,
         tap: ap,
@@ -138,7 +209,15 @@ pub fn live(project: Project, rate: u32) -> (Runner, Remote) {
 impl Runner {
     pub fn process(&mut self, out: &mut [f32], channels: usize) {
         while let Ok(command) = self.commands.pop() {
-            self.engine.handle(command);
+            match command {
+                Command::Listen { input, rate } => {
+                    if let Some(old) = self.monitor.listen(input, rate, self.rate) {
+                        let _ = self.trash.push(Trash::Input(old));
+                    }
+                }
+                Command::Monitor(gain) => self.monitor.gain = gain.max(0.0),
+                other => self.engine.handle(other),
+            }
         }
         let channels = channels.max(1);
         for chunk in out.chunks_mut(BLOCK * channels) {
@@ -148,6 +227,7 @@ impl Runner {
             self.engine.render(block, &mut |f| {
                 let _ = tap.push(f);
             });
+            self.monitor.mix(block);
             for (dst, src) in chunk.chunks_mut(channels).zip(block.iter()) {
                 match dst.len() {
                     1 => dst[0] = (src[0] + src[1]) * 0.5,
@@ -226,6 +306,68 @@ mod tests {
             };
             assert!((t(4.25, 5.0, 5).position(16) - 4.25).abs() < 1e-9);
             assert!((t(15.5, 16.0, 0).position(16) - 15.5).abs() < 1e-9);
+        }
+
+        mod when_monitoring_an_input {
+            use super::*;
+
+            fn listen(gain: f32, rate: u32) -> (Runner, Remote, Producer<[f32; 2]>) {
+                let (mut runner, mut remote) = live(Project::default(), 48000);
+                let (producer, consumer) = RingBuffer::new(4096);
+                remote
+                    .commands
+                    .push(Command::Listen {
+                        input: Some(consumer),
+                        rate,
+                    })
+                    .ok();
+                remote.commands.push(Command::Monitor(gain)).ok();
+                runner.process(&mut [0.0; 2], 2);
+                (runner, remote, producer)
+            }
+
+            #[test]
+            fn plays_the_input_at_the_monitor_gain() {
+                let (mut runner, _remote, mut input) = listen(0.5, 48000);
+                for _ in 0..256 {
+                    input.push([0.4, -0.4]).ok();
+                }
+                let mut out = vec![0.0f32; 128];
+                runner.process(&mut out, 2);
+                assert!(out[20..].chunks(2).all(|f| (f[0] - 0.2).abs() < 1e-4));
+                assert!(out[20..].chunks(2).all(|f| (f[1] + 0.2).abs() < 1e-4));
+            }
+
+            #[test]
+            fn stays_silent_with_the_monitor_off() {
+                let (mut runner, _remote, mut input) = listen(0.0, 48000);
+                for _ in 0..256 {
+                    input.push([0.4, 0.4]).ok();
+                }
+                let mut out = vec![0.0f32; 128];
+                runner.process(&mut out, 2);
+                assert!(out.iter().all(|s| *s == 0.0));
+            }
+
+            #[test]
+            fn drops_input_that_lags_behind() {
+                let (mut runner, _remote, mut input) = listen(1.0, 48000);
+                for _ in 0..4000 {
+                    input.push([0.1, 0.1]).ok();
+                }
+                runner.process(&mut vec![0.0f32; 128], 2);
+                assert!(input.slots() > 4096 - 1100);
+            }
+
+            #[test]
+            fn follows_a_different_input_rate() {
+                let (mut runner, _remote, mut input) = listen(1.0, 24000);
+                for _ in 0..200 {
+                    input.push([0.3, 0.3]).ok();
+                }
+                runner.process(&mut vec![0.0f32; 128], 2);
+                assert_eq!(input.slots(), 4096 - 200 + 32);
+            }
         }
 
         #[test]

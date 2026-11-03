@@ -15,6 +15,8 @@ pub struct Settings {
     pub last: Option<PathBuf>,
     pub threshold: f32,
     pub quantize: usize,
+    pub monitor: f32,
+    pub fader: usize,
 }
 
 impl Default for Settings {
@@ -28,6 +30,8 @@ impl Default for Settings {
             last: None,
             threshold: 0.05,
             quantize: 2,
+            monitor: 0.0,
+            fader: 0,
         }
     }
 }

@@ -1,5 +1,5 @@
 use flip_engine::project::{Filter as FilterKind, LENGTHS, Mode as PlayMode, Wave};
-use flip_engine::{Pad, Source as Engine, Step};
+use flip_engine::{FxKind, Pad, Source as Engine, Step};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +34,18 @@ pub enum Param {
     Master,
     Threshold,
     Capture,
+    Monitor,
+    FxType,
+    FxA,
+    FxB,
+    Send,
+    GroupPitch,
+    GroupTone,
+    GroupPan,
+    DirtDrive,
+    DirtBits,
+    DirtRate,
+    DirtMix,
     Reverse,
     Source,
     FmAlgo,
@@ -106,6 +118,58 @@ const fn choice(name: &'static str, count: usize, default: f32) -> Spec {
 
 pub const SYNTH_PAGE: usize = 3;
 pub const REC_PAGE: usize = 7;
+pub const FX_PAGE: usize = 8;
+pub const FX_TYPES: [&str; 5] = ["DELAY", "REVERB", "DRIVE", "CHORUS", "COMP"];
+pub const FADERS: [(&str, Param); 5] = [
+    ("VOL", Param::GroupVolume),
+    ("PITCH", Param::GroupPitch),
+    ("FILT", Param::GroupTone),
+    ("SEND", Param::Send),
+    ("PAN", Param::GroupPan),
+];
+
+pub const FX_PAGES: usize = 2;
+
+pub fn fx_page(sub: usize) -> (&'static str, [Param; 4]) {
+    if sub.is_multiple_of(2) {
+        ("FX", [Param::FxType, Param::FxA, Param::FxB, Param::Send])
+    } else {
+        (
+            "DIRT",
+            [
+                Param::DirtDrive,
+                Param::DirtBits,
+                Param::DirtRate,
+                Param::DirtMix,
+            ],
+        )
+    }
+}
+
+pub fn fx_names(kind: FxKind) -> [&'static str; 2] {
+    match kind {
+        FxKind::Delay => ["TIME", "FEEDBACK"],
+        FxKind::Reverb => ["SIZE", "TONE"],
+        FxKind::Drive => ["DRIVE", "CRUSH"],
+        FxKind::Chorus => ["RATE", "DEPTH"],
+        FxKind::Comp => ["AMOUNT", "RELEASE"],
+    }
+}
+
+pub fn fx_text(kind: FxKind, first: bool, v: f32) -> String {
+    if kind == FxKind::Delay && first {
+        let steps = flip_engine::fx::delay_steps(v);
+        return match steps as u32 {
+            1 => "1/16".into(),
+            2 => "1/8".into(),
+            3 => "3/16".into(),
+            4 => "1/4".into(),
+            6 => "3/8".into(),
+            _ => "1/2".into(),
+        };
+    }
+    format!("{:.0}%", v * 100.0)
+}
 pub const ENGINES: [&str; 5] = ["SAMPLE", "ANALOG", "FM", "STRING", "MORPH"];
 const WAVES: [&str; 4] = ["SINE", "TRI", "SAW", "SQR"];
 
@@ -156,7 +220,7 @@ pub fn synth_page(source: Engine, sub: usize) -> (String, [Param; 4]) {
 
 pub const CAPTURES: [&str; 6] = ["INPUT", "MASTER", "GRP A", "GRP B", "GRP C", "GRP D"];
 
-pub const PAGES: [(&str, [Param; 4]); 8] = [
+pub const PAGES: [(&str, [Param; 4]); 9] = [
     (
         "TRIM",
         [Param::Start, Param::End, Param::Pitch, Param::Gain],
@@ -209,6 +273,7 @@ pub const PAGES: [(&str, [Param; 4]); 8] = [
             Param::Source,
         ],
     ),
+    ("FX", [Param::FxType, Param::FxA, Param::FxB, Param::Send]),
 ];
 
 impl Param {
@@ -216,7 +281,8 @@ impl Param {
         use Param::*;
         match self {
             Velocity | StepPitch | Chance => Target::Step,
-            Length | Tempo | Swing | GroupVolume | Master | Threshold | Capture => Target::Global,
+            Length | Tempo | Swing | GroupVolume | Master | Threshold | Capture | Monitor
+            | FxType | FxA | FxB | Send | GroupPitch | GroupTone | GroupPan => Target::Global,
             _ => Target::Pad,
         }
     }
@@ -254,6 +320,18 @@ impl Param {
             Master => spec("MASTER", 0.0, 1.0, 0.8),
             Threshold => spec("THRESH", 0.0, 0.5, 0.05),
             Capture => choice("SOURCE", CAPTURES.len(), 0.0),
+            Monitor => spec("MONITOR", 0.0, 1.0, 0.0),
+            FxType => choice("TYPE", FX_TYPES.len(), 0.0),
+            FxA => spec("FX A", 0.0, 1.0, 0.4),
+            FxB => spec("FX B", 0.0, 1.0, 0.4),
+            Send => spec("SEND", 0.0, 1.0, 0.0),
+            GroupPitch => spec("GRP PITCH", -12.0, 12.0, 0.0),
+            GroupTone => spec("GRP FILTER", -1.0, 1.0, 0.0),
+            GroupPan => spec("GRP PAN", -1.0, 1.0, 0.0),
+            DirtDrive => spec("DRIVE", 0.0, 1.0, 0.0),
+            DirtBits => spec("BITS", 2.0, 16.0, 16.0),
+            DirtRate => spec("RATE", 1.0, 32.0, 1.0),
+            DirtMix => spec("MIX", 0.0, 1.0, 1.0),
             Reverse => choice("REVERSE", 2, 0.0),
             Source => choice("ENGINE", ENGINES.len(), 0.0),
             FmAlgo => choice("ALGO", flip_engine::ALGORITHMS, 0.0),
@@ -279,7 +357,7 @@ impl Param {
         use Param::*;
         match self {
             Attack | Decay | Release | OpDecay(_) => 3.0,
-            OpRatio(_) => 2.0,
+            OpRatio(_) | DirtRate => 2.0,
             _ => 1.0,
         }
     }
@@ -337,6 +415,10 @@ impl Param {
             Spread => p.morph.spread,
             Sub => p.morph.sub,
             Drive => p.morph.drive,
+            DirtDrive => p.dirt.drive,
+            DirtBits => p.dirt.bits,
+            DirtRate => p.dirt.rate,
+            DirtMix => p.dirt.mix,
             _ => 0.0,
         }
     }
@@ -383,6 +465,10 @@ impl Param {
             Spread => p.morph.spread = v,
             Sub => p.morph.sub = v,
             Drive => p.morph.drive = v,
+            DirtDrive => p.dirt.drive = v,
+            DirtBits => p.dirt.bits = v,
+            DirtRate => p.dirt.rate = v,
+            DirtMix => p.dirt.mix = v,
             _ => {}
         }
     }
@@ -411,7 +497,9 @@ impl Param {
         match self {
             Start | End | Mix | Sustain | Chance | Velocity | Swing | GroupVolume | Master
             | Cutoff | Resonance | FmFeedback | FmTouch | OpLevel(_) | Damping | Brightness
-            | Body | Bow | Sub | Drive => format!("{:.0}%", v * 100.0),
+            | Body | Bow | Sub | Drive | FxA | FxB | Send | DirtDrive | DirtMix => {
+                format!("{:.0}%", v * 100.0)
+            }
             FmAlgo => format!("{}", i + 1),
             FmDepth => format!("{v:.2}"),
             OpRatio(_) => format!("{v:.1}x"),
@@ -462,6 +550,17 @@ impl Param {
             Length => format!("{}", LENGTHS[i.min(LENGTHS.len() - 1)]),
             Tempo => format!("{v:.1}"),
             Threshold => format!("{:.0}%", v * 200.0),
+            Monitor if v <= 0.0 => "OFF".into(),
+            Monitor => format!("{:.0}%", v * 100.0),
+            FxType => FX_TYPES[i.min(FX_TYPES.len() - 1)].into(),
+            GroupPitch => format!("{v:+.0} st"),
+            GroupTone if v.abs() <= 0.02 => "OFF".into(),
+            GroupTone if v < 0.0 => format!("LP {:.0}", -v * 100.0),
+            GroupTone => format!("HP {:.0}", v * 100.0),
+            GroupPan => format!("{:+.0}", v * 100.0),
+            DirtBits => format!("{v:.0} bit"),
+            DirtRate if v < 1.5 => "OFF".into(),
+            DirtRate => format!("1/{v:.0}"),
             Capture => CAPTURES[i.min(CAPTURES.len() - 1)].into(),
             Reverse => if i > 0 { "ON" } else { "OFF" }.into(),
             Source => ENGINES[i.min(ENGINES.len() - 1)].into(),

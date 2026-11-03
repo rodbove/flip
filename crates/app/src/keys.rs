@@ -62,6 +62,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("CMD Z S O E", "undo save open export"),
     ("P / SHIFT P", "presets / save preset"),
     (", .", "previous / next preset"),
+    ("OPT + 1-4 Q-R", "hold: punch-in fx"),
     ("ESC", "cancel / close"),
     ("/", "this help"),
 ];
@@ -115,6 +116,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             app.label(code, key);
         }
         if !pressed {
+            if app.punch_key.is_some_and(|(k, _)| k == code) {
+                app.punch_key = None;
+                app.sync_punch();
+            }
             let mut i = 0;
             while i < app.held.len() {
                 if app.held[i].0 == code {
@@ -196,6 +201,14 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             if handled {
                 continue;
             }
+        }
+        if modifiers.alt
+            && let Some(i) = PAD_KEYS.iter().position(|k| *k == code)
+            && i < flip_engine::PUNCHES.len()
+        {
+            app.punch_key = Some((code, i));
+            app.sync_punch();
+            continue;
         }
         if app.keys && matches!(code, Key::Z | Key::X) {
             app.octave = (app.octave + if code == Key::Z { -1 } else { 1 }).clamp(-4, 4);

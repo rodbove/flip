@@ -8,7 +8,7 @@ use flip_engine::{GROUPS, PADS, PATTERNS, mood};
 
 use crate::app::{App, FLASH, Take, View};
 use crate::keys::{HELP, PAD_KEYS};
-use crate::params::{PAGES, Param};
+use crate::params::{FADERS, FX_PAGE, PAGES, Param};
 use crate::theme::*;
 
 const W: f32 = 1100.0;
@@ -100,6 +100,7 @@ pub fn draw(app: &mut App, ui: &mut Ui) {
     let k = (full.width() / W).min(full.height() / H);
     let o = full.center() - vec2(W * k / 2.0, H * k / 2.0);
     let l = L { o, k };
+    app.punch_mouse = None;
     let body = l.r(10.0, 10.0, 1080.0, 680.0);
     let grab = ui.interact(body, Id::unique("body"), Sense::click_and_drag());
     if grab.drag_started() {
@@ -117,6 +118,8 @@ pub fn draw(app: &mut App, ui: &mut Ui) {
     pads(app, ui, &l);
     patterns(app, ui, &l);
     footer(app, ui, &l);
+    monitor(app, ui, &l);
+    app.sync_punch();
     silkscreen(ui, &l);
 }
 
@@ -457,21 +460,37 @@ fn lcd(app: &App, ui: &Ui, l: &L, rect: Rect) {
 
 fn fader(app: &mut App, ui: &Ui, l: &L) {
     let track = l.r(651.0, 150.0, 14.0, 382.0);
-    let g = app.group;
+    let param = app.fader_param();
     let resp = ui.interact(
         track.expand(l.s(6.0)),
         Id::unique("fader"),
         Sense::click_and_drag(),
     );
-    if (resp.dragged() || resp.clicked())
+    if resp.double_clicked() {
+        app.set_param(param, param.spec().default);
+    } else if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
-        let v = 1.0 - ((p.y - track.min.y) / track.height()).clamp(0.0, 1.0);
-        app.set_param(Param::GroupVolume, v);
+        let u = 1.0 - ((p.y - track.min.y) / track.height()).clamp(0.0, 1.0);
+        app.set_param(param, param.value_at(u));
+    }
+    if resp.secondary_clicked() {
+        app.learn = Some(param);
     }
     let painter = ui.painter();
     painter.rect_filled(track, l.s(7.0), KEY_SHADOW);
-    let v = app.project.groups[g].volume.clamp(0.0, 1.0);
+    let spec = param.spec();
+    if spec.min < 0.0 {
+        let mid = track.center().y;
+        painter.line_segment(
+            [
+                pos2(track.min.x - l.s(6.0), mid),
+                pos2(track.max.x + l.s(6.0), mid),
+            ],
+            Stroke::new(l.s(1.5), DIM_INK),
+        );
+    }
+    let v = app.param(param).map(|v| param.unit_of(v)).unwrap_or(0.0);
     let cap_h = l.s(26.0);
     let y = track.max.y - v * (track.height() - cap_h) - cap_h;
     let cap = Rect::from_min_size(
@@ -487,12 +506,120 @@ fn fader(app: &mut App, ui: &Ui, l: &L) {
         ],
         Stroke::new(l.s(2.0), ORANGE),
     );
-    painter.text(
+    let label = Rect::from_center_size(
         pos2(track.center().x, track.max.y + l.s(10.0)),
-        Align2::CENTER_CENTER,
-        "VOL",
-        l.f(8.0),
-        DIM_INK,
+        vec2(l.s(34.0), l.s(14.0)),
+    );
+    let pick = ui.interact(label, Id::unique("fader-mode"), Sense::click());
+    let name = FADERS[app.settings.fader.min(FADERS.len() - 1)].0;
+    let ink = if pick.hovered() { ORANGE } else { DIM_INK };
+    painter.text(label.center(), Align2::CENTER_CENTER, name, l.f(8.0), ink);
+    if pick.clicked() {
+        app.cycle_fader();
+    }
+    if resp.hovered() || resp.dragged() {
+        let text = app.param(param).map(|v| param.text(v)).unwrap_or_default();
+        resp.on_hover_text(format!("{name} {text}"));
+    }
+}
+
+fn fx_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
+    let painter = ui.painter();
+    let fx = app.project.fx;
+    let kind = Param::FxType.text(app.param(Param::FxType).unwrap_or(0.0));
+    let names = crate::params::fx_names(fx.kind);
+    painter.text(
+        body.left_top(),
+        Align2::LEFT_TOP,
+        format!(
+            "FX {kind}  {} {}  {} {}",
+            names[0],
+            crate::params::fx_text(fx.kind, true, fx.a),
+            names[1],
+            crate::params::fx_text(fx.kind, false, fx.b)
+        ),
+        l.f(13.0),
+        SCREEN_INK,
+    );
+    let sends: Vec<String> = app
+        .project
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(g, group)| format!("{} {:.0}%", (b'A' + g as u8) as char, group.send * 100.0))
+        .collect();
+    painter.text(
+        body.left_top() + vec2(0.0, l.s(20.0)),
+        Align2::LEFT_TOP,
+        format!("SEND  {}", sends.join("  ")),
+        l.f(10.0),
+        SCREEN_DIM,
+    );
+    let pad = app.current_pad();
+    let dirt = format!(
+        "{} DIRT  {} {}  {}  {}",
+        app.pad_name(app.group, app.pad),
+        Param::DirtDrive.text(pad.dirt.drive),
+        Param::DirtBits.text(pad.dirt.bits),
+        Param::DirtRate.text(pad.dirt.rate),
+        Param::DirtMix.text(pad.dirt.mix)
+    );
+    painter.text(
+        body.right_top(),
+        Align2::RIGHT_TOP,
+        dirt,
+        l.f(10.0),
+        SCREEN_DIM,
+    );
+    let grid = Rect::from_min_max(
+        body.min + vec2(0.0, l.s(44.0)),
+        body.max - vec2(0.0, l.s(16.0)),
+    );
+    let gap = l.s(8.0);
+    let cw = (grid.width() - gap * 3.0) / 4.0;
+    let ch = (grid.height() - gap) / 2.0;
+    for (i, name) in flip_engine::PUNCHES.iter().enumerate() {
+        let (c, r) = (i % 4, i / 4);
+        let rect = Rect::from_min_size(
+            grid.min + vec2(c as f32 * (cw + gap), r as f32 * (ch + gap)),
+            vec2(cw, ch),
+        );
+        let resp = ui.interact(rect, Id::unique(("punch", i)), Sense::click_and_drag());
+        if resp.is_pointer_button_down_on() {
+            app.punch_mouse = Some(i);
+        }
+        let on = app.punch == Some(i);
+        let painter = ui.painter();
+        let (fill, ink) = if on {
+            (ORANGE, SCREEN)
+        } else if resp.hovered() {
+            (SCREEN_FAINT, SCREEN_INK)
+        } else {
+            (SCREEN, SCREEN_INK)
+        };
+        painter.rect_filled(rect, l.s(4.0), fill);
+        painter.rect_stroke(
+            rect,
+            l.s(4.0),
+            Stroke::new(l.s(1.0), if on { ORANGE } else { SCREEN_DIM }),
+            StrokeKind::Inside,
+        );
+        painter.text(rect.center(), Align2::CENTER_CENTER, *name, l.f(12.0), ink);
+        let key = app.key_label(crate::keys::PAD_KEYS[i]);
+        painter.text(
+            rect.left_top() + vec2(l.s(6.0), l.s(5.0)),
+            Align2::LEFT_TOP,
+            format!("OPT {key}"),
+            l.f(8.0),
+            if on { SCREEN } else { SCREEN_DIM },
+        );
+    }
+    painter.text(
+        body.left_bottom(),
+        Align2::LEFT_BOTTOM,
+        "hold a cell or OPT + pad key for punch-in fx. FX again: DIRT knobs",
+        l.f(10.0),
+        SCREEN_DIM,
     );
 }
 
@@ -517,6 +644,7 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
         preset_view(app, ui, l, body);
     } else {
         match app.view {
+            View::Pad if app.page == FX_PAGE => fx_view(app, ui, l, body),
             View::Pad => pad_view(app, ui, l, body),
             View::Seq => seq_view(app, ui, l, body),
             View::Song => song_view(app, ui, l, body),
@@ -1589,11 +1717,13 @@ fn knob(app: &mut App, ui: &Ui, l: &L, i: usize, param: Param, center: Pos2) {
     painter.text(
         center + vec2(0.0, radius + l.s(22.0)),
         Align2::CENTER_CENTER,
-        spec.name,
+        app.knob_label(param),
         l.f(10.0),
         DIM_INK,
     );
-    let text = value.map(|v| param.text(v)).unwrap_or_else(|| "--".into());
+    let text = value
+        .map(|v| app.knob_text(param, v))
+        .unwrap_or_else(|| "--".into());
     painter.text(
         center + vec2(0.0, radius + l.s(36.0)),
         Align2::CENTER_CENTER,
@@ -1639,7 +1769,8 @@ fn knob(app: &mut App, ui: &Ui, l: &L, i: usize, param: Param, center: Pos2) {
 }
 
 fn pages(app: &mut App, ui: &Ui, l: &L) {
-    let w = (600.0 - 7.0 * 6.0) / 8.0;
+    let count = PAGES.len() as f32;
+    let w = (600.0 - (count - 1.0) * 6.0) / count;
     for i in 0..PAGES.len() {
         let rect = l.r(40.0 + i as f32 * (w + 6.0), 526.0, w, 28.0);
         let name = app.page_name(i);
@@ -1969,6 +2100,82 @@ fn footer(app: &App, ui: &Ui, l: &L) {
         l.f(9.0),
         DIM_INK,
     );
+}
+
+fn monitor(app: &mut App, ui: &Ui, l: &L) {
+    let param = Param::Monitor;
+    let center = l.p(616.0, 652.0);
+    let radius = l.s(11.0);
+    let rect = Rect::from_center_size(center, vec2(radius * 3.0, radius * 3.0));
+    let resp = ui.interact(rect, Id::unique("monitor"), Sense::click_and_drag());
+    let value = app.settings.monitor;
+    let u = param.unit_of(value);
+    let painter = ui.painter();
+    let start = 0.75 * PI;
+    let sweep = 1.5 * PI;
+    let ring = radius + l.s(5.0);
+    for t in 0..=10 {
+        let a = start + sweep * t as f32 / 10.0;
+        let p = center + vec2(a.cos(), a.sin()) * ring;
+        let on = value > 0.0 && t as f32 / 10.0 <= u + 1e-4;
+        painter.circle_filled(p, l.s(1.1), if on { ORANGE } else { BODY_EDGE });
+    }
+    painter.circle_filled(center + vec2(0.0, l.s(2.0)), radius, KEY_SHADOW);
+    let face = if resp.hovered() {
+        mix(KEY, ORANGE, 0.15)
+    } else {
+        KEY
+    };
+    painter.circle_filled(center, radius, face);
+    let a = start + sweep * u;
+    let dir = vec2(a.cos(), a.sin());
+    painter.line_segment(
+        [center + dir * radius * 0.3, center + dir * radius * 0.85],
+        Stroke::new(l.s(2.0), if value > 0.0 { ORANGE } else { KEY_INK }),
+    );
+    if app.learn == Some(param) && (app.now * 4.0).fract() < 0.5 {
+        painter.circle_stroke(center, ring + l.s(3.0), Stroke::new(l.s(1.5), ORANGE));
+    }
+    painter.text(
+        l.p(592.0, 652.0),
+        Align2::RIGHT_CENTER,
+        format!("MONITOR {}", param.text(value)),
+        l.f(9.0),
+        DIM_INK,
+    );
+    const ID: usize = 99;
+    if resp.drag_started() {
+        app.drag = Some((ID, u));
+    }
+    if resp.dragged()
+        && let Some((j, mut held)) = app.drag
+        && j == ID
+    {
+        let fine = if ui.input(|inp| inp.modifiers.shift) {
+            FINE
+        } else {
+            1.0
+        };
+        held = (held - resp.drag_delta().y / (l.s(DRAG_RANGE) * fine)).clamp(0.0, 1.0);
+        app.drag = Some((ID, held));
+        app.set_param(param, param.value_at(held));
+    }
+    if resp.drag_stopped() {
+        app.drag = None;
+    }
+    if resp.double_clicked() {
+        app.set_param(param, param.spec().default);
+    }
+    if resp.secondary_clicked() {
+        app.learn = Some(param);
+    }
+    if resp.hovered() {
+        let scroll = ui.input(|inp| inp.smooth_scroll_delta.y);
+        if scroll != 0.0 {
+            let next = (u + scroll / l.s(SCROLL_RANGE)).clamp(0.0, 1.0);
+            app.set_param(param, param.value_at(next));
+        }
+    }
 }
 
 pub fn setup(app: &mut App, ctx: &egui::Context) {

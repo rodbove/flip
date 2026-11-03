@@ -93,6 +93,10 @@ pub struct App {
     pub pad: usize,
     pub page: usize,
     pub sub: usize,
+    pub fx_sub: usize,
+    pub punch: Option<usize>,
+    pub punch_key: Option<(egui::Key, usize)>,
+    pub punch_mouse: Option<usize>,
     pub view: View,
     pub step: Option<usize>,
     pub step_mode: bool,
@@ -149,6 +153,10 @@ impl App {
             pad: 0,
             page: 0,
             sub: 0,
+            fx_sub: 0,
+            punch: None,
+            punch_key: None,
+            punch_mouse: None,
             view: View::Pad,
             step: None,
             step_mode: false,
@@ -227,6 +235,10 @@ impl App {
             Ok(o) => {
                 self.settings.output = Some(o.device.clone());
                 self.output = Some(o);
+                self.send(Command::Monitor(self.settings.monitor));
+                if self.input.is_some() || self.settings.monitor > 0.0 {
+                    self.open_input(self.settings.input.clone());
+                }
             }
             Err(e) => {
                 if wanted.is_some() {
@@ -241,8 +253,12 @@ impl App {
     pub fn open_input(&mut self, wanted: Option<String>) -> bool {
         self.input = None;
         match audio::open_input(wanted.as_deref()) {
-            Ok(i) => {
+            Ok(mut i) => {
                 self.settings.input = Some(i.device.clone());
+                self.send(Command::Listen {
+                    input: i.monitor.take(),
+                    rate: i.rate,
+                });
                 self.input = Some(i);
                 true
             }
@@ -250,6 +266,14 @@ impl App {
                 self.say(format!("no audio input: {e}"));
                 false
             }
+        }
+    }
+
+    pub fn set_monitor(&mut self, v: f32) {
+        self.settings.monitor = v;
+        self.send(Command::Monitor(v));
+        if v > 0.0 && self.input.is_none() {
+            self.open_input(self.settings.input.clone());
         }
     }
 
@@ -518,12 +542,53 @@ impl App {
     pub fn toggle_mute(&mut self, g: usize) {
         let group = &mut self.project.groups[g];
         group.mute = !group.mute;
-        let (volume, mute) = (group.volume, group.mute);
+        self.sync_mix(g);
+    }
+
+    pub fn sync_punch(&mut self) {
+        let want = self.punch_key.map(|(_, i)| i).or(self.punch_mouse);
+        if want != self.punch {
+            self.punch = want;
+            self.send(Command::Punch(want));
+        }
+    }
+
+    pub fn cycle_fader(&mut self) {
+        self.settings.fader = (self.settings.fader + 1) % params::FADERS.len();
+        self.say(format!("fader: {}", params::FADERS[self.settings.fader].0));
+    }
+
+    pub fn fader_param(&self) -> Param {
+        params::FADERS[self.settings.fader.min(params::FADERS.len() - 1)].1
+    }
+
+    pub fn sync_mix(&self, g: usize) {
         self.send(Command::Mix {
             group: g,
-            volume,
-            mute,
+            mix: self.project.groups[g].mix(),
         });
+    }
+
+    fn set_fx(&mut self, f: impl FnOnce(&mut flip_engine::Fx)) {
+        f(&mut self.project.fx);
+        self.send(Command::Fx(self.project.fx));
+    }
+
+    pub fn knob_label(&self, p: Param) -> &'static str {
+        let names = params::fx_names(self.project.fx.kind);
+        match p {
+            Param::FxA => names[0],
+            Param::FxB => names[1],
+            _ => p.spec().name,
+        }
+    }
+
+    pub fn knob_text(&self, p: Param, v: f32) -> String {
+        match p {
+            Param::FxA => params::fx_text(self.project.fx.kind, true, v),
+            Param::FxB => params::fx_text(self.project.fx.kind, false, v),
+            _ => p.text(v),
+        }
     }
 
     pub fn press(
@@ -744,6 +809,17 @@ impl App {
                 Param::Master => self.project.volume,
                 Param::Threshold => self.settings.threshold,
                 Param::Capture => self.source as f32,
+                Param::Monitor => self.settings.monitor,
+                Param::FxType => flip_engine::FxKind::ALL
+                    .iter()
+                    .position(|k| *k == self.project.fx.kind)
+                    .unwrap_or(0) as f32,
+                Param::FxA => self.project.fx.a,
+                Param::FxB => self.project.fx.b,
+                Param::Send => self.project.groups[self.group].send,
+                Param::GroupPitch => self.project.groups[self.group].pitch,
+                Param::GroupTone => self.project.groups[self.group].tone,
+                Param::GroupPan => self.project.groups[self.group].pan,
                 _ => 0.0,
             }),
         }
@@ -785,22 +861,34 @@ impl App {
                     self.project.swing = v;
                     self.send(Command::Swing(v));
                 }
-                Param::GroupVolume => {
+                Param::GroupVolume
+                | Param::GroupPitch
+                | Param::GroupTone
+                | Param::GroupPan
+                | Param::Send => {
                     let group = &mut self.project.groups[g];
-                    group.volume = v;
-                    let (volume, mute) = (group.volume, group.mute);
-                    self.send(Command::Mix {
-                        group: g,
-                        volume,
-                        mute,
-                    });
+                    match p {
+                        Param::GroupVolume => group.volume = v,
+                        Param::GroupPitch => group.pitch = v.round(),
+                        Param::GroupTone => group.tone = v,
+                        Param::GroupPan => group.pan = v,
+                        _ => group.send = v,
+                    }
+                    self.sync_mix(g);
                 }
+                Param::FxType => {
+                    let i = (v.round().max(0.0) as usize).min(flip_engine::FxKind::ALL.len() - 1);
+                    self.set_fx(|fx| fx.kind = flip_engine::FxKind::ALL[i]);
+                }
+                Param::FxA => self.set_fx(|fx| fx.a = v),
+                Param::FxB => self.set_fx(|fx| fx.b = v),
                 Param::Master => {
                     self.project.volume = v;
                     self.send(Command::Volume(v));
                 }
                 Param::Threshold => self.settings.threshold = v,
                 Param::Capture => self.source = v.round() as usize,
+                Param::Monitor => self.set_monitor(v),
                 _ => {}
             },
         }
@@ -809,6 +897,8 @@ impl App {
     pub fn page_params(&self) -> [Param; 4] {
         if self.page == params::SYNTH_PAGE {
             params::synth_page(self.current_pad().source, self.sub).1
+        } else if self.page == params::FX_PAGE {
+            params::fx_page(self.fx_sub).1
         } else {
             PAGES[self.page].1
         }
@@ -851,6 +941,8 @@ impl App {
     pub fn page_name(&self, page: usize) -> String {
         if page == params::SYNTH_PAGE {
             params::synth_page(self.current_pad().source, self.sub).0
+        } else if page == params::FX_PAGE {
+            params::fx_page(self.fx_sub).0.into()
         } else {
             PAGES[page].0.into()
         }
@@ -860,6 +952,9 @@ impl App {
         if page == params::SYNTH_PAGE && self.page == page {
             let count = params::synth_pages(self.current_pad().source);
             self.sub = (self.sub + 1) % count;
+        }
+        if page == params::FX_PAGE && self.page == page {
+            self.fx_sub = (self.fx_sub + 1) % params::FX_PAGES;
         }
         self.page = page;
     }

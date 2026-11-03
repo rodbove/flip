@@ -187,7 +187,7 @@
     <h2><span class="n">3</span>Shape a sound</h2>
     <ol>
       <li>Select a pad. Hit it, or Shift-click it, or right-click it.</li>
-      <li>Select a page: <span class="btn">TRIM</span> <span class="btn">ENV</span> <span class="btn">FILTER</span> <span class="btn">SYNTH</span> <span class="btn">PLAY</span> <span class="btn">MIX</span>.</li>
+      <li>Select a page: <span class="btn">TRIM</span> <span class="btn">ENV</span> <span class="btn">FILTER</span> <span class="btn">SYNTH</span> <span class="btn">PLAY</span> <span class="btn">MIX</span> <span class="btn">FX</span>.</li>
       <li>Drag a knob up or down. Hold Shift for small changes.</li>
       <li>Double-click a knob to reset it.</li>
     </ol>
@@ -202,6 +202,7 @@
       <li>Press <kbd>B</kbd> again to stop.</li>
     </ol>
     <p class="tip">You can also drop audio files on the window. Each file goes into a pad, starting at the selected pad.</p>
+    <p class="tip">To hear an instrument on your audio interface, turn the <b>MONITOR</b> knob up. It is in the bottom row, left of STEP PAGE. Select the input device in SETUP. Turn MONITOR fully down to stop.</p>
   </section>
 
   <section>
@@ -275,10 +276,36 @@
   </section>
 
   <section>
+    <h2><span class="n">11</span>Effects</h2>
+    <ol>
+      <li>Click <span class="btn">FX</span> to open the FX page. The screen shows the effect and the punch-in cells.</li>
+      <li>Turn <b>TYPE</b> to select DELAY, REVERB, DRIVE, CHORUS or COMP. The next two knobs change with the type. The delay time follows the tempo.</li>
+      <li>Turn <b>SEND</b> to send the current group to the effect. Each group has its own send.</li>
+      <li>Click <span class="btn">FX</span> again for the DIRT knobs of the selected pad: DRIVE, BITS, RATE and MIX.</li>
+    </ol>
+    <p>Punch-in effects change the full mix while you hold them:</p>
+    <ul>
+      <li>Hold a cell on the FX screen, or hold <kbd>Option</kbd> and one of the pad keys <kbd>1</kbd> to <kbd>4</kbd> or <kbd>Q</kbd> to <kbd>R</kbd>.</li>
+      <li>LOOP 1/4 to 1/32 repeat a slice from the moment you press. ECHO sends the mix to a delay, and the echo continues after you release. LOW SWEEP and HIGH SWEEP close a filter over one bar. REVERSE plays the last beat backwards.</li>
+      <li>Release to go back to the normal mix.</li>
+    </ul>
+    <p>The group fader has 5 modes. Click the label under the fader to change it:</p>
+    <table>
+      <tr><td>VOL</td><td>Group volume</td></tr>
+      <tr><td>PITCH</td><td>Transpose the group, from -12 to +12 semitones</td></tr>
+      <tr><td>FILT</td><td>Low pass below the middle, high pass above it</td></tr>
+      <tr><td>SEND</td><td>Group send to the FX</td></tr>
+      <tr><td>PAN</td><td>Group pan</td></tr>
+    </table>
+    <p class="tip">Double-click the fader to reset it. Right-click the fader to map it to a MIDI control.</p>
+  </section>
+
+  <section>
     <h2><span class="n">?</span>All keys</h2>
     <table>
       <tr><td>4&times;4 left block</td><td>Play pads</td></tr>
       <tr><td><kbd>Shift</kbd> + pad</td><td>Select a pad without sound</td></tr>
+      <tr><td><kbd>Option</kbd> + pad (top two rows)</td><td>Hold a punch-in effect</td></tr>
       <tr><td><kbd>Tab</kbd></td><td>Keys mode (piano)</td></tr>
       <tr><td><kbd>Space</kbd></td><td>Play / stop</td></tr>
       <tr><td><kbd>Enter</kbd></td><td>Record pad hits into the pattern</td></tr>

@@ -1,7 +1,13 @@
 use std::sync::Arc;
 
+use rtrb::Consumer;
+
 use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
-use crate::project::{Filter, GROUPS, Mode, PADS, Pad, Pattern, Project, Source, Step, TICKS};
+use crate::fx::{Bus, Fx};
+use crate::project::{
+    Dirt, Filter, GROUPS, Mix, Mode, PADS, Pad, Pattern, Project, Source, Step, TICKS,
+};
+use crate::punch::Punch;
 use crate::sample::Sample;
 use crate::synth::{fm, morph, string};
 
@@ -17,6 +23,8 @@ const CLICK_DECAY: f32 = 0.015;
 const CLICK_GAIN: f32 = 0.25;
 const SWEEP_SHARE: f32 = 0.25;
 const SWEEP_MIN: f32 = 0.008;
+const TONE_DEAD: f32 = 0.02;
+const TONE_RES: f32 = 0.2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tap {
@@ -61,13 +69,19 @@ pub enum Command {
     Metronome(bool),
     Mix {
         group: usize,
-        volume: f32,
-        mute: bool,
+        mix: Mix,
     },
+    Fx(Fx),
+    Punch(Option<usize>),
     Volume(f32),
     Tap(Option<Tap>),
     Load(Box<Project>),
     Panic,
+    Listen {
+        input: Option<Consumer<[f32; 2]>>,
+        rate: u32,
+    },
+    Monitor(f32),
 }
 
 pub enum Trash {
@@ -76,6 +90,7 @@ pub enum Trash {
     Song(Box<Vec<[usize; GROUPS]>>),
     Project(Box<Project>),
     Sample(Arc<Sample>),
+    Input(Consumer<[f32; 2]>),
 }
 
 #[derive(Default)]
@@ -98,6 +113,8 @@ struct Voice {
     filters: [Svf; 2],
     coefs: Option<Coefs>,
     tick: u32,
+    hold: [f32; 2],
+    held: f32,
     fm: fm::State,
     morph: morph::State,
     string: string::State,
@@ -155,6 +172,10 @@ pub struct Engine {
     hits: [u32; GROUPS],
     peak: [f32; 2],
     trash: Vec<Trash>,
+    bus: Bus,
+    punch: Punch,
+    tones: [[Svf; 2]; GROUPS],
+    tone_coefs: [Option<(f32, Coefs)>; GROUPS],
 }
 
 impl Engine {
@@ -184,6 +205,10 @@ impl Engine {
             hits: [0; GROUPS],
             peak: [0.0; 2],
             trash: Vec::with_capacity(TRASH),
+            bus: Bus::new(rate),
+            punch: Punch::new(rate),
+            tones: [[Svf::default(); 2]; GROUPS],
+            tone_coefs: [None; GROUPS],
         }
     }
 
@@ -284,13 +309,15 @@ impl Engine {
             Command::Tempo(t) => self.project.tempo = t.clamp(40.0, 240.0),
             Command::Swing(s) => self.project.swing = s.clamp(0.0, 1.0),
             Command::Metronome(on) => self.project.metronome = on,
-            Command::Mix {
-                group,
-                volume,
-                mute,
-            } => {
-                self.project.groups[group].volume = volume;
-                self.project.groups[group].mute = mute;
+            Command::Mix { group, mix } => {
+                if group < GROUPS {
+                    self.project.groups[group].set_mix(mix);
+                }
+            }
+            Command::Fx(fx) => self.project.fx = fx,
+            Command::Punch(p) => {
+                let step = self.step_samples() as f32;
+                self.punch.set(p, step);
             }
             Command::Volume(v) => self.project.volume = v,
             Command::Tap(t) => self.tap = t,
@@ -305,6 +332,12 @@ impl Engine {
                 }
                 self.entry = self.entry.min(self.project.song.len().saturating_sub(1));
             }
+            Command::Listen { input, .. } => {
+                if let Some(i) = input {
+                    self.discard(Trash::Input(i));
+                }
+            }
+            Command::Monitor(_) => {}
             Command::Panic => {
                 for i in 0..VOICES {
                     self.finish(i);
@@ -511,13 +544,16 @@ impl Engine {
             filters: [Svf::default(); 2],
             coefs: None,
             tick: 0,
+            hold: [0.0; 2],
+            held: f32::MAX,
             fm: fm::State::start(),
             morph: morph::State::start(),
             string: string::State::default(),
         };
         if source == Source::String {
             let pad = &self.project.groups[group].pads[pad];
-            let hz = MIDDLE_C * dsp::semis(pad.pitch + note as f32);
+            let shift = self.project.groups[group].pitch;
+            let hz = MIDDLE_C * dsp::semis(pad.pitch + shift + note as f32);
             self.voices[slot].string = string::start(
                 &pad.pluck,
                 &mut self.strings[slot],
@@ -575,14 +611,20 @@ impl Engine {
                 }
             }
             let mut master = [0.0f32; 2];
+            let mut send = [0.0f32; 2];
             for (g, bus) in buses.iter_mut().enumerate() {
-                let group = &self.project.groups[g];
-                let gain = if group.mute { 0.0 } else { group.volume };
-                bus[0] *= gain;
-                bus[1] *= gain;
+                self.channel(g, bus);
+                let amount = self.project.groups[g].send;
                 master[0] += bus[0];
                 master[1] += bus[1];
+                send[0] += bus[0] * amount;
+                send[1] += bus[1] * amount;
             }
+            let step = self.step_samples() as f32;
+            let wet = self.bus.run(&self.project.fx, step, send);
+            master = self
+                .punch
+                .run([master[0] + wet[0], master[1] + wet[1]], step);
             let volume = self.project.volume;
             master = [soft(master[0] * volume), soft(master[1] * volume)];
             match self.tap {
@@ -595,6 +637,40 @@ impl Engine {
             self.peak[1] = self.peak[1].max(master[1].abs());
             *frame = [master[0] + click, master[1] + click];
         }
+    }
+
+    fn channel(&mut self, g: usize, bus: &mut [f32; 2]) {
+        let group = &self.project.groups[g];
+        let gain = if group.mute { 0.0 } else { group.volume };
+        let (tone, pan) = (group.tone.clamp(-1.0, 1.0), group.pan.clamp(-1.0, 1.0));
+        if tone.abs() > TONE_DEAD {
+            let coefs = match self.tone_coefs[g] {
+                Some((t, c)) if t == tone => c,
+                _ => {
+                    let c = if tone < 0.0 {
+                        1.0 + tone * 0.85
+                    } else {
+                        tone * 0.75
+                    };
+                    let c = Coefs::new(dsp::cutoff_hz(c), TONE_RES, self.rate);
+                    self.tone_coefs[g] = Some((tone, c));
+                    c
+                }
+            };
+            let kind = if tone < 0.0 {
+                Filter::Low
+            } else {
+                Filter::High
+            };
+            for (ch, v) in bus.iter_mut().enumerate() {
+                *v = self.tones[g][ch].run(*v, &coefs, kind);
+            }
+        } else if self.tone_coefs[g].is_some() {
+            self.tone_coefs[g] = None;
+            self.tones[g] = [Svf::default(); 2];
+        }
+        bus[0] *= gain * (1.0 - pan).min(1.0);
+        bus[1] *= gain * (1.0 + pan).min(1.0);
     }
 
     fn click_next(&mut self, dt: f32) -> f32 {
@@ -636,7 +712,7 @@ impl Engine {
         if v.env.done() {
             return None;
         }
-        let tune = pad.pitch + v.note as f32;
+        let tune = pad.pitch + v.note as f32 + self.project.groups[v.group].pitch;
         let raw = match (&v.sample, pad.source) {
             (Some(s), Source::Sample) => {
                 let (a, b) = bounds(pad, s.len());
@@ -693,7 +769,11 @@ impl Engine {
         };
 
         let bypass = pad.filter == Filter::Low && pad.cutoff >= 1.0 && pad.env_amount <= 0.0;
-        let mut s = raw;
+        let mut s = if pad.dirt.active() {
+            dirt(&pad.dirt, v, raw)
+        } else {
+            raw
+        };
         if !bypass {
             if v.tick == 0 || v.coefs.is_none() {
                 let c = pad.cutoff + pad.env_amount * level;
@@ -732,6 +812,27 @@ fn analog(synth: &crate::project::Synth, v: &mut Voice, hz: f32, rate: f32, rng:
     v.phase_a = (v.phase_a + dt_a).fract();
     v.phase_b = (v.phase_b + dt_b).fract();
     a * (1.0 - synth.mix) + b * synth.mix
+}
+
+fn dirt(d: &Dirt, v: &mut Voice, x: [f32; 2]) -> [f32; 2] {
+    v.held += 1.0;
+    if v.held >= d.rate.max(1.0) {
+        v.held = 0.0;
+        v.hold = x;
+    }
+    let gain = 1.0 + d.drive * 20.0;
+    let makeup = 1.0 / (1.0 + d.drive * 2.0);
+    let levels = 2f32.powf(d.bits.clamp(1.0, 16.0) - 1.0);
+    let mix = d.mix.clamp(0.0, 1.0);
+    std::array::from_fn(|ch| {
+        let crushed = (v.hold[ch] * levels).round() / levels;
+        let driven = if d.drive > 0.0 {
+            (crushed * gain).tanh() * makeup
+        } else {
+            crushed
+        };
+        x[ch] + (driven - x[ch]) * mix
+    })
 }
 
 fn soft(x: f32) -> f32 {
@@ -1175,6 +1276,75 @@ mod tests {
             assert!(e.project.groups[0].pads[0].source == Source::Sample);
             let trash: Vec<_> = e.take_trash().collect();
             assert!(matches!(&trash[0], Trash::Pad(p) if p.source == Source::Synth));
+        }
+    }
+
+    mod when_a_group_sends_to_the_fx {
+        use super::*;
+
+        fn echo(send: f32) -> f32 {
+            let mut e = engine();
+            e.handle(Command::Fx(Fx {
+                kind: crate::fx::FxKind::Delay,
+                a: 1.0,
+                b: 0.5,
+            }));
+            let mut mix = e.project.groups[0].mix();
+            mix.send = send;
+            e.handle(Command::Mix { group: 0, mix });
+            e.handle(Command::Note {
+                group: 0,
+                pad: 0,
+                note: 0,
+                velocity: 1.0,
+                on: true,
+            });
+            steps(&mut e, 8.0);
+            loud(&run(&mut e, 2400))
+        }
+
+        #[test]
+        fn repeats_the_hit_on_the_delay() {
+            assert!(echo(1.0) > echo(0.0) + 0.05);
+        }
+    }
+
+    mod when_a_pad_has_dirt {
+        use super::*;
+
+        fn render(dirt: Dirt) -> Vec<[f32; 2]> {
+            let mut e = engine();
+            e.project.groups[0].pads[0].dirt = dirt;
+            e.handle(Command::Note {
+                group: 0,
+                pad: 0,
+                note: 0,
+                velocity: 1.0,
+                on: true,
+            });
+            run(&mut e, 2400)
+        }
+
+        #[test]
+        fn changes_the_sound() {
+            let clean = render(Dirt::default());
+            let dirty = render(Dirt {
+                bits: 3.0,
+                rate: 8.0,
+                ..Dirt::default()
+            });
+            assert!(loud(&dirty) > 0.05);
+            assert!(
+                clean
+                    .iter()
+                    .zip(&dirty)
+                    .any(|(a, b)| (a[0] - b[0]).abs() > 0.01)
+            );
+        }
+
+        #[test]
+        fn stays_clean_at_the_defaults() {
+            assert!(!Dirt::default().active());
         }
     }
 

@@ -198,6 +198,32 @@ impl Default for Morph {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dirt {
+    pub drive: f32,
+    pub bits: f32,
+    pub rate: f32,
+    pub mix: f32,
+}
+
+impl Default for Dirt {
+    fn default() -> Self {
+        Self {
+            drive: 0.0,
+            bits: 16.0,
+            rate: 1.0,
+            mix: 1.0,
+        }
+    }
+}
+
+impl Dirt {
+    pub fn active(&self) -> bool {
+        self.mix > 0.0 && (self.drive > 0.0 || self.bits < 16.0 || self.rate > 1.0)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Pad {
@@ -226,6 +252,7 @@ pub struct Pad {
     pub fm: Fm,
     pub pluck: Pluck,
     pub morph: Morph,
+    pub dirt: Dirt,
 }
 
 impl Default for Pad {
@@ -255,6 +282,7 @@ impl Default for Pad {
             fm: Fm::default(),
             pluck: Pluck::default(),
             morph: Morph::default(),
+            dirt: Dirt::default(),
         }
     }
 }
@@ -500,6 +528,10 @@ pub struct Group {
     pub pattern: usize,
     pub volume: f32,
     pub mute: bool,
+    pub pitch: f32,
+    pub tone: f32,
+    pub pan: f32,
+    pub send: f32,
 }
 
 impl Default for Group {
@@ -510,7 +542,43 @@ impl Default for Group {
             pattern: 0,
             volume: 0.8,
             mute: false,
+            pitch: 0.0,
+            tone: 0.0,
+            pan: 0.0,
+            send: 0.0,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mix {
+    pub volume: f32,
+    pub mute: bool,
+    pub pitch: f32,
+    pub tone: f32,
+    pub pan: f32,
+    pub send: f32,
+}
+
+impl Group {
+    pub fn mix(&self) -> Mix {
+        Mix {
+            volume: self.volume,
+            mute: self.mute,
+            pitch: self.pitch,
+            tone: self.tone,
+            pan: self.pan,
+            send: self.send,
+        }
+    }
+
+    pub fn set_mix(&mut self, m: Mix) {
+        self.volume = m.volume;
+        self.mute = m.mute;
+        self.pitch = m.pitch;
+        self.tone = m.tone;
+        self.pan = m.pan;
+        self.send = m.send;
     }
 }
 
@@ -525,6 +593,7 @@ pub struct Project {
     pub song: Vec<[usize; GROUPS]>,
     pub song_mode: bool,
     pub mood: String,
+    pub fx: crate::fx::Fx,
 }
 
 impl Default for Project {
@@ -538,6 +607,7 @@ impl Default for Project {
             song: Vec::new(),
             song_mode: false,
             mood: String::new(),
+            fx: crate::fx::Fx::default(),
         }
     }
 }

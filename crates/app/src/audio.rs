@@ -7,6 +7,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 const SCRATCH: usize = 8192;
 const INPUT_SECONDS: usize = 4;
+const MONITOR_SECONDS: f32 = 0.25;
 
 #[derive(Clone, Default)]
 pub struct Sender(Arc<Mutex<Option<Producer<Command>>>>);
@@ -40,6 +41,7 @@ pub struct Input {
     pub rate: u32,
     pub device: String,
     pub frames: Consumer<[f32; 2]>,
+    pub monitor: Option<Consumer<[f32; 2]>>,
     _stream: cpal::Stream,
 }
 
@@ -156,11 +158,13 @@ pub fn open_input(wanted: Option<&str>) -> Result<Input, String> {
     let rate = config.sample_rate;
     let channels = config.channels as usize;
     let (producer, consumer) = RingBuffer::new(rate as usize * INPUT_SECONDS);
+    let (live, monitor) = RingBuffer::new((rate as f32 * MONITOR_SECONDS) as usize);
+    let out = (producer, live);
     let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => build_input::<f32>(&device, config, producer, channels),
-        cpal::SampleFormat::I16 => build_input::<i16>(&device, config, producer, channels),
-        cpal::SampleFormat::I32 => build_input::<i32>(&device, config, producer, channels),
-        cpal::SampleFormat::U16 => build_input::<u16>(&device, config, producer, channels),
+        cpal::SampleFormat::F32 => build_input::<f32>(&device, config, out, channels),
+        cpal::SampleFormat::I16 => build_input::<i16>(&device, config, out, channels),
+        cpal::SampleFormat::I32 => build_input::<i32>(&device, config, out, channels),
+        cpal::SampleFormat::U16 => build_input::<u16>(&device, config, out, channels),
         other => return Err(format!("unsupported sample format {other:?}")),
     }?;
     stream.play().map_err(|e| e.to_string())?;
@@ -168,6 +172,7 @@ pub fn open_input(wanted: Option<&str>) -> Result<Input, String> {
         rate,
         device: name(&device),
         frames: consumer,
+        monitor: Some(monitor),
         _stream: stream,
     })
 }
@@ -175,7 +180,7 @@ pub fn open_input(wanted: Option<&str>) -> Result<Input, String> {
 fn build_input<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    mut producer: Producer<[f32; 2]>,
+    (mut producer, mut live): (Producer<[f32; 2]>, Producer<[f32; 2]>),
     channels: usize,
 ) -> Result<cpal::Stream, String>
 where
@@ -195,6 +200,7 @@ where
                         l
                     };
                     let _ = producer.push([l, r]);
+                    let _ = live.push([l, r]);
                 }
             },
             |e| eprintln!("input error: {e}"),
