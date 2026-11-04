@@ -1,5 +1,6 @@
+use flip_engine::fx::TIME_NAMES;
 use flip_engine::project::{Filter as FilterKind, LENGTHS, Mode as PlayMode, Wave};
-use flip_engine::{Pad, Source as Engine, Step};
+use flip_engine::{Keys, Pad, Source as Engine, Step};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +53,15 @@ pub enum Param {
     Spread,
     Sub,
     Drive,
+    Vibrato,
+    FxDrive,
+    Phaser,
+    Chorus,
+    Rotary,
+    Tremolo,
+    Delay,
+    DelayTime,
+    Reverb,
 }
 
 impl Param {
@@ -72,6 +82,7 @@ impl Param {
 
 pub enum Target {
     Pad,
+    Keys,
     Step,
     Global,
 }
@@ -154,6 +165,29 @@ pub fn synth_page(source: Engine, sub: usize) -> (String, [Param; 4]) {
     }
 }
 
+pub const KEYS_PAGES: [(&str, [Param; 4]); 6] = [
+    (
+        "VOICE",
+        [Param::Pitch, Param::Gain, Param::Pan, Param::Vibrato],
+    ),
+    PAGES[1],
+    PAGES[2],
+    PAGES[3],
+    (
+        "FX",
+        [Param::FxDrive, Param::Phaser, Param::Chorus, Param::Rotary],
+    ),
+    (
+        "SPACE",
+        [
+            Param::Tremolo,
+            Param::Delay,
+            Param::DelayTime,
+            Param::Reverb,
+        ],
+    ),
+];
+
 pub const CAPTURES: [&str; 6] = ["INPUT", "MASTER", "GRP A", "GRP B", "GRP C", "GRP D"];
 
 pub const PAGES: [(&str, [Param; 4]); 8] = [
@@ -217,6 +251,9 @@ impl Param {
         match self {
             Velocity | StepPitch | Chance => Target::Step,
             Length | Tempo | Swing | GroupVolume | Master | Threshold | Capture => Target::Global,
+            Vibrato | FxDrive | Phaser | Chorus | Rotary | Tremolo | Delay | DelayTime | Reverb => {
+                Target::Keys
+            }
             _ => Target::Pad,
         }
     }
@@ -272,6 +309,15 @@ impl Param {
             Spread => spec("SPREAD", 0.0, 0.5, 0.1),
             Sub => spec("SUB", 0.0, 1.0, 0.0),
             Drive => spec("DRIVE", 0.0, 1.0, 0.0),
+            Vibrato => spec("VIBRATO", 0.0, 1.0, 0.0),
+            FxDrive => spec("DRIVE", 0.0, 1.0, 0.0),
+            Phaser => spec("PHASER", 0.0, 1.0, 0.0),
+            Chorus => spec("CHORUS", 0.0, 1.0, 0.0),
+            Rotary => spec("ROTARY", 0.0, 1.0, 0.0),
+            Tremolo => spec("TREMOLO", 0.0, 1.0, 0.0),
+            Delay => spec("DELAY", 0.0, 1.0, 0.0),
+            DelayTime => choice("TIME", TIME_NAMES.len(), 2.0),
+            Reverb => spec("REVERB", 0.0, 1.0, 0.0),
         }
     }
 
@@ -387,6 +433,38 @@ impl Param {
         }
     }
 
+    pub fn keys_get(self, k: &Keys) -> f32 {
+        use Param::*;
+        match self {
+            Vibrato => k.vibrato,
+            FxDrive => k.fx.drive,
+            Phaser => k.fx.phaser,
+            Chorus => k.fx.chorus,
+            Rotary => k.fx.rotary,
+            Tremolo => k.fx.tremolo,
+            Delay => k.fx.delay,
+            DelayTime => k.fx.time as f32,
+            Reverb => k.fx.reverb,
+            _ => 0.0,
+        }
+    }
+
+    pub fn keys_set(self, k: &mut Keys, v: f32) {
+        use Param::*;
+        match self {
+            Vibrato => k.vibrato = v,
+            FxDrive => k.fx.drive = v,
+            Phaser => k.fx.phaser = v,
+            Chorus => k.fx.chorus = v,
+            Rotary => k.fx.rotary = v,
+            Tremolo => k.fx.tremolo = v,
+            Delay => k.fx.delay = v,
+            DelayTime => k.fx.time = (v.round().max(0.0) as u8).min(TIME_NAMES.len() as u8 - 1),
+            Reverb => k.fx.reverb = v,
+            _ => {}
+        }
+    }
+
     pub fn step_get(self, s: &Step) -> f32 {
         match self {
             Param::Velocity => s.velocity,
@@ -411,7 +489,10 @@ impl Param {
         match self {
             Start | End | Mix | Sustain | Chance | Velocity | Swing | GroupVolume | Master
             | Cutoff | Resonance | FmFeedback | FmTouch | OpLevel(_) | Damping | Brightness
-            | Body | Bow | Sub | Drive => format!("{:.0}%", v * 100.0),
+            | Body | Bow | Sub | Drive | FxDrive | Phaser | Chorus | Rotary | Tremolo | Delay
+            | Reverb => format!("{:.0}%", v * 100.0),
+            Vibrato => format!("{v:.2} st"),
+            DelayTime => TIME_NAMES[i.min(TIME_NAMES.len() - 1)].into(),
             FmAlgo => format!("{}", i + 1),
             FmDepth => format!("{v:.2}"),
             OpRatio(_) => format!("{v:.1}x"),
@@ -546,6 +627,23 @@ mod tests {
             assert_eq!(pad.fm.ops[2].ratio, 3.5);
             Param::OpRatio(2).pad_set(&mut pad, 0.1);
             assert_eq!(pad.fm.ops[2].ratio, 0.5);
+        }
+    }
+
+    mod when_turning_a_keys_knob {
+        use super::*;
+
+        #[test]
+        fn writes_back_to_the_patch() {
+            let mut keys = Keys::default();
+            Param::Reverb.keys_set(&mut keys, 0.4);
+            assert_eq!(keys.fx.reverb, 0.4);
+            Param::DelayTime.keys_set(&mut keys, 99.0);
+            assert_eq!(
+                Param::DelayTime.keys_get(&keys),
+                (TIME_NAMES.len() - 1) as f32
+            );
+            assert!(matches!(Param::Vibrato.target(), Target::Keys));
         }
     }
 

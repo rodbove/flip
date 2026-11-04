@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::keys::{KEYS, Keys};
 use crate::sample::Sample;
 
 pub const GROUPS: usize = 4;
@@ -481,7 +482,7 @@ impl<'de> Deserialize<'de> for Pattern {
         pattern.notes = file
             .clip
             .into_iter()
-            .filter(|n| (n.pad as usize) < PADS && n.start < ticks)
+            .filter(|n| (n.pad as usize) <= KEYS && n.start < ticks)
             .map(|n| Note {
                 length: n.length.max(1),
                 ..n
@@ -500,6 +501,17 @@ pub struct Group {
     pub pattern: usize,
     pub volume: f32,
     pub mute: bool,
+    pub keys: Keys,
+}
+
+impl Group {
+    pub fn sound(&self, pad: usize) -> &Pad {
+        if pad == KEYS {
+            &self.keys.sound
+        } else {
+            &self.pads[pad]
+        }
+    }
 }
 
 impl Default for Group {
@@ -510,6 +522,7 @@ impl Default for Group {
             pattern: 0,
             volume: 0.8,
             mute: false,
+            keys: Keys::default(),
         }
     }
 }

@@ -15,6 +15,7 @@ pub struct Settings {
     pub last: Option<PathBuf>,
     pub threshold: f32,
     pub quantize: usize,
+    pub pad_keys: bool,
 }
 
 impl Default for Settings {
@@ -28,6 +29,7 @@ impl Default for Settings {
             last: None,
             threshold: 0.05,
             quantize: 2,
+            pad_keys: false,
         }
     }
 }

@@ -13,6 +13,8 @@ Read the tutorial at https://rodbove.github.io/flip/.
 - 12 moods load a full set of sounds into the 4 groups: DUSTY, CLUB, TRAP, DREAM, FUNK, CHIP, ORGANIC, DARK, CARIOCA, BOSSA, SAMBA and MPB. Each mood also has a demo beat and bass line. DICE changes one pad to a new sound in the same mood.
 - The KO screen imports the EP-133 KO II factory pack (a `.pak` file from teenage engineering). It loads the 5 factory kits and lets you browse the 309 factory sounds by category.
 - The KEYS screen shows a keyboard with the keys you play (orange) and the recorded notes that play back (blue), with a trail of recent notes.
+- Each group has a keys patch for a MIDI keyboard. The KEYS screen lists 76 patches in 8 categories: PIANO, ORGAN, STRINGS, PAD, LEAD, BASS, MALLET and PLUCK. Examples are grand piano, tine and reed electric pianos, clav, tonewheel and pipe organs, string machine, warm pad, supersaw, acid bass and FM bells.
+- Each keys patch has its own effects: drive, phaser, chorus, rotary speaker, tremolo, tempo delay and reverb.
 - A preset browser with more than 40 factory sounds. Save your own sounds as presets.
 - Each pad has a start and end point, pitch, an envelope, a filter, pan and a choke group.
 - Play modes: one shot, gate and loop.
@@ -113,8 +115,9 @@ Mouse:
 ## MIDI
 
 - Notes 36 to 51 play the 16 pads. Note 36 is the bottom-left pad.
-- Other notes play the selected pad at that pitch.
-- In keys mode, all notes play the selected pad.
+- Other notes play the keys patch of the selected group.
+- In keys mode, all notes play the keys patch.
+- On the KEYS screen, click PLAYS PATCH to play the selected pad instead. Click it again to go back to the patch.
 - When you record, notes from keys mode and notes outside 36 to 51 go into the note track of the pattern. Pad notes go into the steps.
 - The sustain pedal (CC 64) holds the notes and makes the recorded notes longer.
 
@@ -123,7 +126,11 @@ Mouse:
 1. Connect the USB TO HOST port of the keyboard to the computer.
 2. Open SETUP and select the keyboard as the MIDI port.
 3. Turn the keyboard volume down, or set Local Control off, so you hear only Flip.
-4. Push Tab for keys mode, so all keys play the selected pad.
+4. Push Tab for keys mode, so all keys play the keys patch.
+5. Push - for the KEYS screen. Click a category, then click a patch.
+6. Push , or . to try the previous or next patch.
+7. On the KEYS screen, the knob pages are VOICE, ENV, FILTER, SYNTH, FX and SPACE. They edit the keys patch. FX has drive, phaser, chorus and rotary. SPACE has tremolo, delay, delay time and reverb.
+8. In the ROLL screen, click KEYS to edit the recorded keys notes.
 
 ## KO II factory pack
 

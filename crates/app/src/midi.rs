@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender as Channel, channel};
 
-use flip_engine::{Command, PADS};
+use flip_engine::{Command, KEYS, PADS};
 use midir::{MidiInput, MidiInputConnection};
 
 use crate::audio::Sender;
@@ -16,6 +16,7 @@ pub struct Route {
     pub group: AtomicUsize,
     pub pad: AtomicUsize,
     pub keys: AtomicBool,
+    pub pad_keys: AtomicBool,
 }
 
 const SUSTAIN: u8 = 64;
@@ -59,7 +60,12 @@ pub fn map(route: &Route, note: u8) -> (usize, usize, i8) {
         return (group, pad, 0);
     }
     let offset = (note as i32 - MIDDLE_C).clamp(-48, 48) as i8;
-    (group, selected, offset)
+    let pad = if route.pad_keys.load(Ordering::Relaxed) {
+        selected
+    } else {
+        KEYS
+    };
+    (group, pad, offset)
 }
 
 pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
@@ -264,10 +270,10 @@ mod tests {
         }
 
         #[test]
-        fn plays_other_notes_on_the_selected_pad() {
+        fn plays_other_notes_on_the_keys_patch() {
             let route = Route::default();
             route.pad.store(5, Ordering::Relaxed);
-            assert_eq!(map(&route, 64), (0, 5, 4));
+            assert_eq!(map(&route, 64), (0, KEYS, 4));
             assert_eq!(map(&route, 36), (0, 12, 0));
         }
     }
@@ -276,11 +282,25 @@ mod tests {
         use super::*;
 
         #[test]
-        fn plays_every_note_on_the_selected_pad() {
+        fn plays_every_note_on_the_keys_patch() {
             let route = Route::default();
             route.keys.store(true, Ordering::Relaxed);
             route.pad.store(2, Ordering::Relaxed);
-            assert_eq!(map(&route, 36), (0, 2, -24));
+            assert_eq!(map(&route, 36), (0, KEYS, -24));
+        }
+    }
+
+    mod when_the_keys_follow_the_selected_pad {
+        use super::*;
+
+        #[test]
+        fn plays_melodic_notes_on_that_pad() {
+            let route = Route::default();
+            route.pad_keys.store(true, Ordering::Relaxed);
+            route.pad.store(5, Ordering::Relaxed);
+            assert_eq!(map(&route, 64), (0, 5, 4));
+            route.keys.store(true, Ordering::Relaxed);
+            assert_eq!(map(&route, 36), (0, 5, -24));
         }
     }
 

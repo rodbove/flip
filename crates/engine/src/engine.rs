@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
+use crate::fx::Rack;
+use crate::keys::{KEYS, Keys, VIBRATO_HZ};
 use crate::project::{Filter, GROUPS, Mode, PADS, Pad, Pattern, Project, Source, Step, TICKS};
 use crate::sample::Sample;
 use crate::synth::{fm, morph, string};
@@ -64,6 +66,10 @@ pub enum Command {
         volume: f32,
         mute: bool,
     },
+    Keys {
+        group: usize,
+        data: Box<Keys>,
+    },
     Volume(f32),
     Tap(Option<Tap>),
     Load(Box<Project>),
@@ -73,6 +79,7 @@ pub enum Command {
 pub enum Trash {
     Pad(Box<Pad>),
     Pattern(Box<Pattern>),
+    Keys(Box<Keys>),
     Song(Box<Vec<[usize; GROUPS]>>),
     Project(Box<Project>),
     Sample(Arc<Sample>),
@@ -155,6 +162,8 @@ pub struct Engine {
     hits: [u32; GROUPS],
     peak: [f32; 2],
     trash: Vec<Trash>,
+    racks: Vec<Rack>,
+    vibrato: f32,
 }
 
 impl Engine {
@@ -184,6 +193,8 @@ impl Engine {
             hits: [0; GROUPS],
             peak: [0.0; 2],
             trash: Vec::with_capacity(TRASH),
+            racks: (0..GROUPS).map(|_| Rack::new(rate as f32)).collect(),
+            vibrato: 0.0,
         }
     }
 
@@ -227,7 +238,7 @@ impl Engine {
                 velocity,
                 on,
             } => {
-                if group < GROUPS && pad < PADS {
+                if group < GROUPS && (pad < PADS || pad == KEYS) {
                     if on {
                         self.note_on(group, pad, note, velocity, None);
                     } else {
@@ -291,6 +302,10 @@ impl Engine {
             } => {
                 self.project.groups[group].volume = volume;
                 self.project.groups[group].mute = mute;
+            }
+            Command::Keys { group, mut data } => {
+                std::mem::swap(&mut self.project.groups[group].keys, &mut data);
+                self.discard(Trash::Keys(data));
             }
             Command::Volume(v) => self.project.volume = v,
             Command::Tap(t) => self.tap = t,
@@ -443,7 +458,7 @@ impl Engine {
         while i < self.pending.len() {
             if self.pending[i].at <= self.phase {
                 let p = self.pending.swap_remove(i);
-                if p.pad < PADS {
+                if p.pad < PADS || p.pad == KEYS {
                     self.note_on(p.group, p.pad, p.note, p.velocity, Some(p.gate));
                 }
             } else {
@@ -453,7 +468,7 @@ impl Engine {
     }
 
     fn note_on(&mut self, group: usize, pad: usize, note: i8, velocity: f32, gate: Option<u64>) {
-        let p = &self.project.groups[group].pads[pad];
+        let p = self.project.groups[group].sound(pad);
         if p.silent() {
             return;
         }
@@ -477,7 +492,7 @@ impl Engine {
             }
             let same = v.pad == pad && v.note == note;
             let choked =
-                choke > 0 && v.pad != pad && self.project.groups[group].pads[v.pad].choke == choke;
+                choke > 0 && v.pad != pad && self.project.groups[group].sound(v.pad).choke == choke;
             if same || choked {
                 self.voices[i].kill = KILL;
             }
@@ -516,7 +531,7 @@ impl Engine {
             string: string::State::default(),
         };
         if source == Source::String {
-            let pad = &self.project.groups[group].pads[pad];
+            let pad = self.project.groups[group].sound(pad);
             let hz = MIDDLE_C * dsp::semis(pad.pitch + note as f32);
             self.voices[slot].string = string::start(
                 &pad.pluck,
@@ -532,7 +547,7 @@ impl Engine {
         for v in &mut self.voices {
             if v.active && v.group == group && v.pad == pad && v.note == note && v.gate {
                 v.gate = false;
-                if self.project.groups[group].pads[pad].mode != Mode::OneShot {
+                if self.project.groups[group].sound(pad).mode != Mode::OneShot {
                     v.env.release();
                 }
             }
@@ -560,19 +575,37 @@ impl Engine {
                 }
                 self.phase += inc;
             }
+            self.vibrato = (self.vibrato + VIBRATO_HZ * dt).fract();
             let mut buses = [[0.0f32; 2]; GROUPS];
+            let mut keys = [[0.0f32; 2]; GROUPS];
             for i in 0..VOICES {
                 if !self.voices[i].active {
                     continue;
                 }
                 match self.voice(i, dt) {
                     Some(s) => {
-                        let bus = &mut buses[self.voices[i].group];
+                        let v = &self.voices[i];
+                        let bus = if v.pad == KEYS {
+                            &mut keys[v.group]
+                        } else {
+                            &mut buses[v.group]
+                        };
                         bus[0] += s[0];
                         bus[1] += s[1];
                     }
                     None => self.finish(i),
                 }
+            }
+            let tempo = self.project.tempo;
+            for (g, k) in keys.iter().enumerate() {
+                let fx = &self.project.groups[g].keys.fx;
+                let out = if fx.dry() {
+                    *k
+                } else {
+                    self.racks[g].run(fx, *k, tempo)
+                };
+                buses[g][0] += out[0];
+                buses[g][1] += out[1];
             }
             let mut master = [0.0f32; 2];
             for (g, bus) in buses.iter_mut().enumerate() {
@@ -611,7 +644,8 @@ impl Engine {
     fn voice(&mut self, i: usize, dt: f32) -> Option<[f32; 2]> {
         let rate = self.rate;
         let v = &mut self.voices[i];
-        let pad = &self.project.groups[v.group].pads[v.pad];
+        let group = &self.project.groups[v.group];
+        let pad = group.sound(v.pad);
         if let Some(left) = v.gate_left.as_mut() {
             if *left == 0 {
                 v.gate_left = None;
@@ -636,7 +670,10 @@ impl Engine {
         if v.env.done() {
             return None;
         }
-        let tune = pad.pitch + v.note as f32;
+        let mut tune = pad.pitch + v.note as f32;
+        if v.pad == KEYS && group.keys.vibrato > 0.0 {
+            tune += group.keys.vibrato * (self.vibrato * std::f32::consts::TAU).sin();
+        }
         let raw = match (&v.sample, pad.source) {
             (Some(s), Source::Sample) => {
                 let (a, b) = bounds(pad, s.len());
@@ -816,6 +853,47 @@ mod tests {
 
     fn loud(frames: &[[f32; 2]]) -> f32 {
         crate::sample::peak(frames)
+    }
+
+    mod when_the_keyboard_plays {
+        use super::*;
+        use crate::keys::PATCHES;
+
+        fn key(e: &mut Engine, on: bool) {
+            e.handle(Command::Note {
+                group: 0,
+                pad: KEYS,
+                note: 0,
+                velocity: 0.9,
+                on,
+            });
+        }
+
+        #[test]
+        fn sounds_every_patch_and_lets_go() {
+            for patch in PATCHES.iter() {
+                let mut e = engine();
+                e.handle(Command::Keys {
+                    group: 0,
+                    data: Box::new(patch.keys.clone()),
+                });
+                key(&mut e, true);
+                let held = run(&mut e, RATE as usize);
+                let peak = loud(&held);
+                assert!(peak > 0.02 && peak < 1.0, "{} peak {peak}", patch.name);
+                key(&mut e, false);
+                run(&mut e, RATE as usize * 4);
+                assert_eq!(e.report().voices, 0, "{}", patch.name);
+            }
+        }
+
+        #[test]
+        fn leaves_the_pads_alone() {
+            let mut e = engine();
+            key(&mut e, true);
+            run(&mut e, 480);
+            assert_eq!(e.report().hits[0] & 0xffff, 0);
+        }
     }
 
     mod when_a_pad_is_hit {

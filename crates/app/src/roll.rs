@@ -98,7 +98,7 @@ impl Frame {
 pub fn view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
     let g = app.group;
     let index = app.editing();
-    let pad = app.pad;
+    let pad = app.roll_pad();
     let pattern: Pattern = app.project.groups[g].patterns[index].clone();
     let grid_index = app.settings.quantize.min(record::GRIDS.len() - 1);
     let grid_ticks = record::grid(grid_index);
@@ -123,6 +123,38 @@ pub fn view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         l.f(8.0),
         SCREEN_DIM,
     );
+    let chip = Rect::from_min_size(
+        body.left_top() + vec2(l.s(236.0), -l.s(1.0)),
+        vec2(l.s(44.0), l.s(14.0)),
+    );
+    let chip_resp = ui.interact(chip, Id::unique("roll-keys"), Sense::click());
+    if app.roll_keys {
+        painter.rect_filled(chip, l.s(3.0), ORANGE);
+    } else {
+        painter.rect_stroke(
+            chip,
+            l.s(3.0),
+            Stroke::new(
+                l.s(1.0),
+                if chip_resp.hovered() {
+                    SCREEN_INK
+                } else {
+                    SCREEN_DIM
+                },
+            ),
+            StrokeKind::Inside,
+        );
+    }
+    painter.text(
+        chip.center(),
+        Align2::CENTER_CENTER,
+        "KEYS",
+        l.f(9.0),
+        if app.roll_keys { SCREEN } else { SCREEN_DIM },
+    );
+    if chip_resp.clicked() {
+        app.roll_keys = !app.roll_keys;
+    }
     let area = Rect::from_min_max(body.min + vec2(0.0, l.s(18.0)), body.max);
     let keys_w = l.s(30.0);
     let f = Frame {
