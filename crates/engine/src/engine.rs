@@ -102,6 +102,8 @@ struct Voice {
     phase_a: f32,
     phase_b: f32,
     sweep: f32,
+    sweep_fall: f32,
+    gains: [f32; 2],
     filters: [Svf; 2],
     coefs: Option<Coefs>,
     tick: u32,
@@ -202,8 +204,9 @@ impl Engine {
         &self.project
     }
 
-    pub fn take_trash(&mut self) -> impl Iterator<Item = Trash> + '_ {
-        self.trash.drain(..)
+    pub fn take_trash(&mut self, max: usize) -> impl Iterator<Item = Trash> + '_ {
+        let n = max.min(self.trash.len());
+        self.trash.drain(..n)
     }
 
     fn discard(&mut self, t: Trash) {
@@ -269,7 +272,11 @@ impl Engine {
                 step,
                 data,
             } => {
-                *self.project.groups[group].patterns[index].step_mut(pad, step) = data;
+                let pattern = &mut self.project.groups[group].patterns[index];
+                if step >= pattern.stride() {
+                    return;
+                }
+                *pattern.step_mut(pad, step) = data;
                 if self.playing && self.current[group] == index && self.pos[group] == step {
                     self.suppress[group] |= 1 << pad;
                 }
@@ -523,6 +530,8 @@ impl Engine {
             phase_a: 0.0,
             phase_b: 0.0,
             sweep: 1.0,
+            sweep_fall: 1.0,
+            gains: [0.0; 2],
             filters: [Svf::default(); 2],
             coefs: None,
             tick: 0,
@@ -670,6 +679,11 @@ impl Engine {
         if v.env.done() {
             return None;
         }
+        if v.tick == 0 {
+            v.gains = dsp::pan(pad.pan);
+            let sweep_time = (pad.decay * SWEEP_SHARE).max(SWEEP_MIN);
+            v.sweep_fall = (-dt / sweep_time).exp();
+        }
         let mut tune = pad.pitch + v.note as f32;
         if v.pad == KEYS && group.keys.vibrato > 0.0 {
             tune += group.keys.vibrato * (self.vibrato * std::f32::consts::TAU).sin();
@@ -711,8 +725,7 @@ impl Engine {
             (_, Source::Sample) => return None,
             (_, source) => {
                 let synth = &pad.synth;
-                let sweep_time = (pad.decay * SWEEP_SHARE).max(SWEEP_MIN);
-                v.sweep *= (-dt / sweep_time).exp();
+                v.sweep *= v.sweep_fall;
                 let hz = MIDDLE_C * dsp::semis(tune + synth.sweep * v.sweep);
                 let s = match source {
                     Source::Fm => fm::next(&pad.fm, &mut v.fm, hz, v.velocity, dt),
@@ -736,7 +749,6 @@ impl Engine {
                 let c = pad.cutoff + pad.env_amount * level;
                 v.coefs = Some(Coefs::new(dsp::cutoff_hz(c), pad.resonance, rate));
             }
-            v.tick = (v.tick + 1) % COEF_EVERY;
             if let Some(c) = &v.coefs {
                 s = [
                     v.filters[0].run(s[0], c, pad.filter),
@@ -744,6 +756,7 @@ impl Engine {
                 ];
             }
         }
+        v.tick = (v.tick + 1) % COEF_EVERY;
         let mut gain = level * v.velocity * pad.gain;
         if v.kill > 0 {
             v.kill -= 1;
@@ -752,7 +765,7 @@ impl Engine {
             }
             gain *= v.kill as f32 / KILL as f32;
         }
-        let [l, r] = dsp::pan(pad.pan);
+        let [l, r] = v.gains;
         Some([s[0] * gain * l, s[1] * gain * r])
     }
 
@@ -1034,7 +1047,10 @@ mod tests {
             hit(&mut e, true);
             let mut out = vec![[0.0; 2]; 9600];
             e.render(&mut out, &mut |_| {});
-            assert!(e.take_trash().any(|t| matches!(t, Trash::Sample(_))));
+            assert!(
+                e.take_trash(usize::MAX)
+                    .any(|t| matches!(t, Trash::Sample(_)))
+            );
         }
 
         #[test]
@@ -1252,8 +1268,67 @@ mod tests {
                 data: Box::new(Pad::default()),
             });
             assert!(e.project.groups[0].pads[0].source == Source::Sample);
-            let trash: Vec<_> = e.take_trash().collect();
+            let trash: Vec<_> = e.take_trash(usize::MAX).collect();
             assert!(matches!(&trash[0], Trash::Pad(p) if p.source == Source::Synth));
+        }
+
+        mod when_the_cleanup_has_room_for_less {
+            use super::*;
+
+            #[test]
+            fn keeps_the_rest_for_later() {
+                let mut e = engine();
+                for pad in 0..3 {
+                    e.handle(Command::Pad {
+                        group: 0,
+                        pad,
+                        data: Box::new(Pad::default()),
+                    });
+                }
+                assert_eq!(e.take_trash(1).count(), 1);
+                assert_eq!(e.take_trash(usize::MAX).count(), 2);
+            }
+        }
+    }
+
+    mod when_writing_a_step {
+        use super::*;
+
+        mod when_the_step_is_past_the_pattern_storage {
+            use super::*;
+
+            #[test]
+            fn ignores_it_without_growing_the_pattern() {
+                let mut e = engine();
+                let stride = e.project.groups[0].patterns[0].stride();
+                e.handle(Command::Write {
+                    group: 0,
+                    index: 0,
+                    pad: 0,
+                    step: stride,
+                    data: Step {
+                        on: true,
+                        ..Step::default()
+                    },
+                });
+                assert_eq!(e.project.groups[0].patterns[0].stride(), stride);
+            }
+        }
+
+        #[test]
+        fn stores_the_step() {
+            let mut e = engine();
+            e.handle(Command::Write {
+                group: 0,
+                index: 0,
+                pad: 1,
+                step: 3,
+                data: Step {
+                    on: true,
+                    ..Step::default()
+                },
+            });
+            assert!(e.project.groups[0].patterns[0].step(1, 3).on);
         }
     }
 

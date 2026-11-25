@@ -1,49 +1,68 @@
 #[cfg(target_arch = "x86_64")]
-const FTZ_DAZ: u32 = 0x8040;
+const FLUSH: u64 = 0x8040;
+#[cfg(target_arch = "aarch64")]
+const FLUSH: u64 = 1 << 24;
 
 pub struct NoDenormals {
-    #[cfg(target_arch = "x86_64")]
-    saved: u32,
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    saved: u64,
 }
 
 impl NoDenormals {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         {
             let saved = read();
-            write(saved | FTZ_DAZ);
+            write(saved | FLUSH);
             Self { saved }
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         Self {}
     }
 }
 
 impl Drop for NoDenormals {
     fn drop(&mut self) {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         write(self.saved);
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-fn read() -> u32 {
+fn read() -> u64 {
     let mut csr = 0u32;
     unsafe {
-        std::arch::asm!("stmxcsr [{}]", in(reg) &mut csr, options(nostack, preserves_flags));
+        std::arch::asm!("stmxcsr [{}]", in(reg) &raw mut csr, options(nostack, preserves_flags));
     }
-    csr
+    u64::from(csr)
 }
 
 #[cfg(target_arch = "x86_64")]
-fn write(csr: u32) {
+fn write(csr: u64) {
+    let csr = csr as u32;
     unsafe {
-        std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, readonly, preserves_flags));
+        std::arch::asm!("ldmxcsr [{}]", in(reg) &raw const csr, options(nostack, readonly, preserves_flags));
     }
 }
 
-#[cfg(all(test, target_arch = "x86_64"))]
+#[cfg(target_arch = "aarch64")]
+fn read() -> u64 {
+    let fpcr: u64;
+    unsafe {
+        std::arch::asm!("mrs {}, fpcr", out(reg) fpcr, options(nomem, nostack, preserves_flags));
+    }
+    fpcr
+}
+
+#[cfg(target_arch = "aarch64")]
+fn write(fpcr: u64) {
+    unsafe {
+        std::arch::asm!("msr fpcr, {}", in(reg) fpcr, options(nomem, nostack, preserves_flags));
+    }
+}
+
+#[cfg(all(test, any(target_arch = "x86_64", target_arch = "aarch64")))]
 mod tests {
     use std::hint::black_box;
 

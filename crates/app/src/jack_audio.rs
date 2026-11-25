@@ -88,7 +88,7 @@ fn realtime_budget_ok() -> bool {
         rlim_cur: 0,
         rlim_max: 0,
     };
-    let ok = unsafe { libc::getrlimit(libc::RLIMIT_RTTIME, &mut limit) } == 0;
+    let ok = unsafe { libc::getrlimit(libc::RLIMIT_RTTIME, &raw mut limit) } == 0;
     !ok || limit.rlim_cur != 0
 }
 

@@ -77,7 +77,10 @@ impl Line {
 
     fn push(&mut self, x: f32) {
         self.buf[self.write] = x;
-        self.write = (self.write + 1) % self.buf.len();
+        self.write += 1;
+        if self.write == self.buf.len() {
+            self.write = 0;
+        }
     }
 
     fn read(&self, delay: f32) -> f32 {
@@ -111,7 +114,10 @@ impl Comb {
         let y = self.buf[self.at];
         self.low = y * (1.0 - DAMP) + self.low * DAMP;
         self.buf[self.at] = x + self.low * ROOM;
-        self.at = (self.at + 1) % self.buf.len();
+        self.at += 1;
+        if self.at == self.buf.len() {
+            self.at = 0;
+        }
         y
     }
 }
@@ -132,7 +138,10 @@ impl Allpass {
     fn run(&mut self, x: f32) -> f32 {
         let held = self.buf[self.at];
         self.buf[self.at] = x + held * 0.5;
-        self.at = (self.at + 1) % self.buf.len();
+        self.at += 1;
+        if self.at == self.buf.len() {
+            self.at = 0;
+        }
         held - x
     }
 }

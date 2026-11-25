@@ -62,6 +62,8 @@ On a tiling window manager, make the window float. For xmonad, add `className =?
 
 Run `cargo run --release`.
 
+To measure the speed of the sound engine, run `cargo run --release -p flip-engine --example bench`. The benchmark plays each mood for 10 seconds, then plays a stress test with 32 held keys notes. It does not need an audio device. LOAD is the part of the time limit of a 256-frame block that the engine uses. Keep WORST under 100%.
+
 To save a screenshot, set `FLIP_SHOT` to a `.tga` path. Set `FLIP_MOOD` to load a mood and its beat first, for example `FLIP_SHOT=shot.tga FLIP_MOOD=samba cargo run --release`.
 
 ## Window

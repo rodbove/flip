@@ -162,10 +162,9 @@ impl Runner {
                 }
             }
         }
-        for t in self.engine.take_trash() {
-            if self.trash.push(t).is_err() {
-                break;
-            }
+        let room = self.trash.slots();
+        for t in self.engine.take_trash(room) {
+            let _ = self.trash.push(t);
         }
         self.status.publish(&self.engine.report());
     }
