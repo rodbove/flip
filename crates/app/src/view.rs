@@ -525,14 +525,14 @@ fn fader(app: &mut App, ui: &Ui, l: &L) {
 
 fn fx_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
     let painter = ui.painter();
-    let fx = app.project.fx;
+    let fx = app.project.bus;
     let kind = Param::FxType.text(app.param(Param::FxType).unwrap_or(0.0));
     let names = crate::params::fx_names(fx.kind);
     painter.text(
         body.left_top(),
         Align2::LEFT_TOP,
         format!(
-            "FX {kind}  {} {}  {} {}",
+            "BUS {kind}  {} {}  {} {}",
             names[0],
             crate::params::fx_text(fx.kind, true, fx.a),
             names[1],
@@ -555,7 +555,7 @@ fn fx_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         l.f(10.0),
         SCREEN_DIM,
     );
-    let pad = app.current_pad();
+    let pad = app.sound();
     let dirt = format!(
         "{} DIRT  {} {}  {}  {}",
         app.pad_name(app.group, app.pad),
@@ -617,7 +617,7 @@ fn fx_view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
     painter.text(
         body.left_bottom(),
         Align2::LEFT_BOTTOM,
-        "hold a cell or OPT + pad key for punch-in fx. FX again: DIRT knobs",
+        "hold a cell or OPT + pad key for punch-in fx. BUS again: DIRT knobs",
         l.f(10.0),
         SCREEN_DIM,
     );

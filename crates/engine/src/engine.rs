@@ -3,7 +3,9 @@ use std::sync::Arc;
 use rtrb::Consumer;
 
 use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
-use crate::fx::{Bus, Fx};
+use crate::bus::{Bus, BusFx};
+use crate::fx::Rack;
+use crate::keys::{KEYS, Keys, VIBRATO_HZ};
 use crate::project::{
     Dirt, Filter, GROUPS, Mix, Mode, PADS, Pad, Pattern, Project, Source, Step, TICKS,
 };
@@ -71,7 +73,11 @@ pub enum Command {
         group: usize,
         mix: Mix,
     },
-    Fx(Fx),
+    Keys {
+        group: usize,
+        data: Box<Keys>,
+    },
+    Bus(BusFx),
     Punch(Option<usize>),
     Volume(f32),
     Tap(Option<Tap>),
@@ -87,6 +93,7 @@ pub enum Command {
 pub enum Trash {
     Pad(Box<Pad>),
     Pattern(Box<Pattern>),
+    Keys(Box<Keys>),
     Song(Box<Vec<[usize; GROUPS]>>),
     Project(Box<Project>),
     Sample(Arc<Sample>),
@@ -110,6 +117,8 @@ struct Voice {
     phase_a: f32,
     phase_b: f32,
     sweep: f32,
+    sweep_fall: f32,
+    gains: [f32; 2],
     filters: [Svf; 2],
     coefs: Option<Coefs>,
     tick: u32,
@@ -176,6 +185,8 @@ pub struct Engine {
     punch: Punch,
     tones: [[Svf; 2]; GROUPS],
     tone_coefs: [Option<(f32, Coefs)>; GROUPS],
+    racks: Vec<Rack>,
+    vibrato: f32,
 }
 
 impl Engine {
@@ -209,6 +220,8 @@ impl Engine {
             punch: Punch::new(rate),
             tones: [[Svf::default(); 2]; GROUPS],
             tone_coefs: [None; GROUPS],
+            racks: (0..GROUPS).map(|_| Rack::new(rate as f32)).collect(),
+            vibrato: 0.0,
         }
     }
 
@@ -216,8 +229,9 @@ impl Engine {
         &self.project
     }
 
-    pub fn take_trash(&mut self) -> impl Iterator<Item = Trash> + '_ {
-        self.trash.drain(..)
+    pub fn take_trash(&mut self, max: usize) -> impl Iterator<Item = Trash> + '_ {
+        let n = max.min(self.trash.len());
+        self.trash.drain(..n)
     }
 
     fn discard(&mut self, t: Trash) {
@@ -252,7 +266,7 @@ impl Engine {
                 velocity,
                 on,
             } => {
-                if group < GROUPS && pad < PADS {
+                if group < GROUPS && (pad < PADS || pad == KEYS) {
                     if on {
                         self.note_on(group, pad, note, velocity, None);
                     } else {
@@ -283,7 +297,11 @@ impl Engine {
                 step,
                 data,
             } => {
-                *self.project.groups[group].patterns[index].step_mut(pad, step) = data;
+                let pattern = &mut self.project.groups[group].patterns[index];
+                if step >= pattern.stride() {
+                    return;
+                }
+                *pattern.step_mut(pad, step) = data;
                 if self.playing && self.current[group] == index && self.pos[group] == step {
                     self.suppress[group] |= 1 << pad;
                 }
@@ -314,10 +332,14 @@ impl Engine {
                     self.project.groups[group].set_mix(mix);
                 }
             }
-            Command::Fx(fx) => self.project.fx = fx,
+            Command::Bus(fx) => self.project.bus = fx,
             Command::Punch(p) => {
                 let step = self.step_samples() as f32;
                 self.punch.set(p, step);
+            }
+            Command::Keys { group, mut data } => {
+                std::mem::swap(&mut self.project.groups[group].keys, &mut data);
+                self.discard(Trash::Keys(data));
             }
             Command::Volume(v) => self.project.volume = v,
             Command::Tap(t) => self.tap = t,
@@ -476,7 +498,7 @@ impl Engine {
         while i < self.pending.len() {
             if self.pending[i].at <= self.phase {
                 let p = self.pending.swap_remove(i);
-                if p.pad < PADS {
+                if p.pad < PADS || p.pad == KEYS {
                     self.note_on(p.group, p.pad, p.note, p.velocity, Some(p.gate));
                 }
             } else {
@@ -486,7 +508,7 @@ impl Engine {
     }
 
     fn note_on(&mut self, group: usize, pad: usize, note: i8, velocity: f32, gate: Option<u64>) {
-        let p = &self.project.groups[group].pads[pad];
+        let p = self.project.groups[group].sound(pad);
         if p.silent() {
             return;
         }
@@ -510,7 +532,7 @@ impl Engine {
             }
             let same = v.pad == pad && v.note == note;
             let choked =
-                choke > 0 && v.pad != pad && self.project.groups[group].pads[v.pad].choke == choke;
+                choke > 0 && v.pad != pad && self.project.groups[group].sound(v.pad).choke == choke;
             if same || choked {
                 self.voices[i].kill = KILL;
             }
@@ -541,6 +563,8 @@ impl Engine {
             phase_a: 0.0,
             phase_b: 0.0,
             sweep: 1.0,
+            sweep_fall: 1.0,
+            gains: [0.0; 2],
             filters: [Svf::default(); 2],
             coefs: None,
             tick: 0,
@@ -551,7 +575,7 @@ impl Engine {
             string: string::State::default(),
         };
         if source == Source::String {
-            let pad = &self.project.groups[group].pads[pad];
+            let pad = self.project.groups[group].sound(pad);
             let shift = self.project.groups[group].pitch;
             let hz = MIDDLE_C * dsp::semis(pad.pitch + shift + note as f32);
             self.voices[slot].string = string::start(
@@ -568,7 +592,7 @@ impl Engine {
         for v in &mut self.voices {
             if v.active && v.group == group && v.pad == pad && v.note == note && v.gate {
                 v.gate = false;
-                if self.project.groups[group].pads[pad].mode != Mode::OneShot {
+                if self.project.groups[group].sound(pad).mode != Mode::OneShot {
                     v.env.release();
                 }
             }
@@ -596,19 +620,37 @@ impl Engine {
                 }
                 self.phase += inc;
             }
+            self.vibrato = (self.vibrato + VIBRATO_HZ * dt).fract();
             let mut buses = [[0.0f32; 2]; GROUPS];
+            let mut keys = [[0.0f32; 2]; GROUPS];
             for i in 0..VOICES {
                 if !self.voices[i].active {
                     continue;
                 }
                 match self.voice(i, dt) {
                     Some(s) => {
-                        let bus = &mut buses[self.voices[i].group];
+                        let v = &self.voices[i];
+                        let bus = if v.pad == KEYS {
+                            &mut keys[v.group]
+                        } else {
+                            &mut buses[v.group]
+                        };
                         bus[0] += s[0];
                         bus[1] += s[1];
                     }
                     None => self.finish(i),
                 }
+            }
+            let tempo = self.project.tempo;
+            for (g, k) in keys.iter().enumerate() {
+                let fx = &self.project.groups[g].keys.fx;
+                let out = if fx.dry() {
+                    *k
+                } else {
+                    self.racks[g].run(fx, *k, tempo)
+                };
+                buses[g][0] += out[0];
+                buses[g][1] += out[1];
             }
             let mut master = [0.0f32; 2];
             let mut send = [0.0f32; 2];
@@ -621,7 +663,7 @@ impl Engine {
                 send[1] += bus[1] * amount;
             }
             let step = self.step_samples() as f32;
-            let wet = self.bus.run(&self.project.fx, step, send);
+            let wet = self.bus.run(&self.project.bus, step, send);
             master = self
                 .punch
                 .run([master[0] + wet[0], master[1] + wet[1]], step);
@@ -687,7 +729,8 @@ impl Engine {
     fn voice(&mut self, i: usize, dt: f32) -> Option<[f32; 2]> {
         let rate = self.rate;
         let v = &mut self.voices[i];
-        let pad = &self.project.groups[v.group].pads[v.pad];
+        let group = &self.project.groups[v.group];
+        let pad = group.sound(v.pad);
         if let Some(left) = v.gate_left.as_mut() {
             if *left == 0 {
                 v.gate_left = None;
@@ -712,7 +755,15 @@ impl Engine {
         if v.env.done() {
             return None;
         }
-        let tune = pad.pitch + v.note as f32 + self.project.groups[v.group].pitch;
+        if v.tick == 0 {
+            v.gains = dsp::pan(pad.pan);
+            let sweep_time = (pad.decay * SWEEP_SHARE).max(SWEEP_MIN);
+            v.sweep_fall = (-dt / sweep_time).exp();
+        }
+        let mut tune = pad.pitch + v.note as f32 + group.pitch;
+        if v.pad == KEYS && group.keys.vibrato > 0.0 {
+            tune += group.keys.vibrato * (self.vibrato * std::f32::consts::TAU).sin();
+        }
         let raw = match (&v.sample, pad.source) {
             (Some(s), Source::Sample) => {
                 let (a, b) = bounds(pad, s.len());
@@ -750,8 +801,7 @@ impl Engine {
             (_, Source::Sample) => return None,
             (_, source) => {
                 let synth = &pad.synth;
-                let sweep_time = (pad.decay * SWEEP_SHARE).max(SWEEP_MIN);
-                v.sweep *= (-dt / sweep_time).exp();
+                v.sweep *= v.sweep_fall;
                 let hz = MIDDLE_C * dsp::semis(tune + synth.sweep * v.sweep);
                 let s = match source {
                     Source::Fm => fm::next(&pad.fm, &mut v.fm, hz, v.velocity, dt),
@@ -779,7 +829,6 @@ impl Engine {
                 let c = pad.cutoff + pad.env_amount * level;
                 v.coefs = Some(Coefs::new(dsp::cutoff_hz(c), pad.resonance, rate));
             }
-            v.tick = (v.tick + 1) % COEF_EVERY;
             if let Some(c) = &v.coefs {
                 s = [
                     v.filters[0].run(s[0], c, pad.filter),
@@ -787,6 +836,7 @@ impl Engine {
                 ];
             }
         }
+        v.tick = (v.tick + 1) % COEF_EVERY;
         let mut gain = level * v.velocity * pad.gain;
         if v.kill > 0 {
             v.kill -= 1;
@@ -795,7 +845,7 @@ impl Engine {
             }
             gain *= v.kill as f32 / KILL as f32;
         }
-        let [l, r] = dsp::pan(pad.pan);
+        let [l, r] = v.gains;
         Some([s[0] * gain * l, s[1] * gain * r])
     }
 
@@ -859,6 +909,7 @@ pub enum Bounce {
 }
 
 pub fn bounce(project: &Project, rate: u32, what: Bounce, tail: f32) -> Vec<[f32; 2]> {
+    let _ftz = crate::denormal::NoDenormals::new();
     let mut project = project.clone();
     project.metronome = false;
     project.song_mode = what == Bounce::Song;
@@ -916,6 +967,47 @@ mod tests {
 
     fn loud(frames: &[[f32; 2]]) -> f32 {
         crate::sample::peak(frames)
+    }
+
+    mod when_the_keyboard_plays {
+        use super::*;
+        use crate::keys::PATCHES;
+
+        fn key(e: &mut Engine, on: bool) {
+            e.handle(Command::Note {
+                group: 0,
+                pad: KEYS,
+                note: 0,
+                velocity: 0.9,
+                on,
+            });
+        }
+
+        #[test]
+        fn sounds_every_patch_and_lets_go() {
+            for patch in PATCHES.iter() {
+                let mut e = engine();
+                e.handle(Command::Keys {
+                    group: 0,
+                    data: Box::new(patch.keys.clone()),
+                });
+                key(&mut e, true);
+                let held = run(&mut e, RATE as usize);
+                let peak = loud(&held);
+                assert!(peak > 0.02 && peak < 1.0, "{} peak {peak}", patch.name);
+                key(&mut e, false);
+                run(&mut e, RATE as usize * 4);
+                assert_eq!(e.report().voices, 0, "{}", patch.name);
+            }
+        }
+
+        #[test]
+        fn leaves_the_pads_alone() {
+            let mut e = engine();
+            key(&mut e, true);
+            run(&mut e, 480);
+            assert_eq!(e.report().hits[0] & 0xffff, 0);
+        }
     }
 
     mod when_a_pad_is_hit {
@@ -1056,7 +1148,10 @@ mod tests {
             hit(&mut e, true);
             let mut out = vec![[0.0; 2]; 9600];
             e.render(&mut out, &mut |_| {});
-            assert!(e.take_trash().any(|t| matches!(t, Trash::Sample(_))));
+            assert!(
+                e.take_trash(usize::MAX)
+                    .any(|t| matches!(t, Trash::Sample(_)))
+            );
         }
 
         #[test]
@@ -1274,8 +1369,67 @@ mod tests {
                 data: Box::new(Pad::default()),
             });
             assert!(e.project.groups[0].pads[0].source == Source::Sample);
-            let trash: Vec<_> = e.take_trash().collect();
+            let trash: Vec<_> = e.take_trash(usize::MAX).collect();
             assert!(matches!(&trash[0], Trash::Pad(p) if p.source == Source::Synth));
+        }
+
+        mod when_the_cleanup_has_room_for_less {
+            use super::*;
+
+            #[test]
+            fn keeps_the_rest_for_later() {
+                let mut e = engine();
+                for pad in 0..3 {
+                    e.handle(Command::Pad {
+                        group: 0,
+                        pad,
+                        data: Box::new(Pad::default()),
+                    });
+                }
+                assert_eq!(e.take_trash(1).count(), 1);
+                assert_eq!(e.take_trash(usize::MAX).count(), 2);
+            }
+        }
+    }
+
+    mod when_writing_a_step {
+        use super::*;
+
+        mod when_the_step_is_past_the_pattern_storage {
+            use super::*;
+
+            #[test]
+            fn ignores_it_without_growing_the_pattern() {
+                let mut e = engine();
+                let stride = e.project.groups[0].patterns[0].stride();
+                e.handle(Command::Write {
+                    group: 0,
+                    index: 0,
+                    pad: 0,
+                    step: stride,
+                    data: Step {
+                        on: true,
+                        ..Step::default()
+                    },
+                });
+                assert_eq!(e.project.groups[0].patterns[0].stride(), stride);
+            }
+        }
+
+        #[test]
+        fn stores_the_step() {
+            let mut e = engine();
+            e.handle(Command::Write {
+                group: 0,
+                index: 0,
+                pad: 1,
+                step: 3,
+                data: Step {
+                    on: true,
+                    ..Step::default()
+                },
+            });
+            assert!(e.project.groups[0].patterns[0].step(1, 3).on);
         }
     }
 
@@ -1284,8 +1438,8 @@ mod tests {
 
         fn echo(send: f32) -> f32 {
             let mut e = engine();
-            e.handle(Command::Fx(Fx {
-                kind: crate::fx::FxKind::Delay,
+            e.handle(Command::Bus(BusFx {
+                kind: crate::bus::BusKind::Delay,
                 a: 1.0,
                 b: 0.5,
             }));

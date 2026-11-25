@@ -1,4 +1,5 @@
-use eframe::egui::{Align2, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
+use eframe::egui::{Align2, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use flip_engine::keys::{CATEGORIES, PATCHES, in_category};
 use flip_engine::{GROUPS, TICKS};
 
 use crate::app::App;
@@ -154,14 +155,156 @@ pub fn name(key: u8) -> String {
     format!("{}{}", NAMES[key as usize % 12], key as i32 / 12 - 1)
 }
 
+const PATCH_COLUMNS: usize = 4;
+const PATCH_ROWS: usize = 3;
+
+fn chip(ui: &Ui, l: &L, rect: Rect, id: &str, label: &str, on: bool) -> bool {
+    let resp = ui.interact(rect, Id::unique(id), Sense::click());
+    let painter = ui.painter();
+    if on {
+        painter.rect_filled(rect, l.s(3.0), ORANGE);
+    } else {
+        painter.rect_stroke(
+            rect,
+            l.s(3.0),
+            Stroke::new(
+                l.s(1.0),
+                if resp.hovered() {
+                    SCREEN_INK
+                } else {
+                    SCREEN_DIM
+                },
+            ),
+            StrokeKind::Inside,
+        );
+    }
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        l.f(9.0),
+        if on { SCREEN } else { SCREEN_DIM },
+    );
+    resp.clicked()
+}
+
+fn patches(app: &mut App, ui: &Ui, l: &L, area: Rect) {
+    let tab_h = l.s(15.0);
+    let tab_w = area.width() / CATEGORIES.len() as f32;
+    let mut pick_category = None;
+    for (i, name) in CATEGORIES.iter().enumerate() {
+        let rect = Rect::from_min_size(
+            pos2(area.min.x + i as f32 * tab_w, area.min.y),
+            vec2(tab_w, tab_h),
+        );
+        let resp = ui.interact(rect, Id::unique(("keys-tab", i)), Sense::click());
+        let on = app.keys_category == i;
+        if on {
+            ui.painter()
+                .rect_filled(rect.shrink(l.s(1.0)), l.s(3.0), SCREEN_FAINT);
+        }
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            *name,
+            l.f(9.0),
+            if on || resp.hovered() {
+                ORANGE
+            } else {
+                SCREEN_DIM
+            },
+        );
+        if resp.clicked() {
+            pick_category = Some(i);
+        }
+    }
+    let current = &app.project.groups[app.group].keys.patch;
+    let follow_pad = app.settings.pad_keys;
+    let list = Rect::from_min_max(pos2(area.min.x, area.min.y + tab_h + l.s(3.0)), area.max);
+    let row_h = list.height() / PATCH_ROWS as f32;
+    let col_w = list.width() / PATCH_COLUMNS as f32;
+    let mut load = None;
+    for (n, index) in in_category(app.keys_category)
+        .into_iter()
+        .take(PATCH_ROWS * PATCH_COLUMNS)
+        .enumerate()
+    {
+        let rect = Rect::from_min_size(
+            list.min
+                + vec2(
+                    (n % PATCH_COLUMNS) as f32 * col_w,
+                    (n / PATCH_COLUMNS) as f32 * row_h,
+                ),
+            vec2(col_w - l.s(4.0), row_h - l.s(2.0)),
+        );
+        let resp = ui.interact(rect, Id::unique(("keys-patch", index)), Sense::click());
+        let name = PATCHES[index].name;
+        let on = name == current && !follow_pad;
+        let painter = ui.painter();
+        if on {
+            painter.rect_filled(rect, l.s(3.0), SCREEN_FAINT);
+        } else if resp.hovered() {
+            painter.rect_stroke(
+                rect,
+                l.s(3.0),
+                Stroke::new(l.s(1.0), SCREEN_FAINT),
+                StrokeKind::Inside,
+            );
+        }
+        painter.text(
+            rect.left_center() + vec2(l.s(6.0), 0.0),
+            Align2::LEFT_CENTER,
+            name,
+            l.f(10.0),
+            if on || resp.hovered() {
+                ORANGE
+            } else {
+                SCREEN_INK
+            },
+        );
+        if resp.clicked() {
+            load = Some(index);
+        }
+    }
+    if let Some(i) = pick_category {
+        app.keys_category = i;
+    }
+    if let Some(i) = load {
+        app.load_patch(i);
+    }
+}
+
 pub fn view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
+    let toggle = Rect::from_min_size(
+        pos2(body.max.x - l.s(118.0), body.min.y - l.s(1.0)),
+        vec2(l.s(118.0), l.s(14.0)),
+    );
+    let label = if app.settings.pad_keys {
+        format!("PLAYS PAD {}", app.pad_name(app.group, app.pad))
+    } else {
+        "PLAYS PATCH".to_string()
+    };
+    if chip(ui, l, toggle, "keys-sound", &label, app.settings.pad_keys) {
+        let on = !app.settings.pad_keys;
+        app.set_pad_keys(on);
+        app.say(if on {
+            "keyboard plays the selected pad"
+        } else {
+            "keyboard plays the keys patch"
+        });
+    }
+    let browser = Rect::from_min_max(
+        body.min + vec2(0.0, l.s(16.0)),
+        pos2(body.max.x, body.min.y + l.s(80.0)),
+    );
+    patches(app, ui, l, browser);
     let painter = ui.painter();
     let (low, high) = app.keyboard.range();
     let whites = white_count(low, high).max(1);
     let keys_h = l.s(46.0);
     let keys = Rect::from_min_max(pos2(body.min.x, body.max.y - keys_h), body.max);
     let trail = Rect::from_min_max(
-        body.min + vec2(0.0, l.s(18.0)),
+        pos2(body.min.x, browser.max.y + l.s(14.0)),
         pos2(body.max.x, keys.min.y - l.s(2.0)),
     );
     let ww = keys.width() / whites as f32;
@@ -182,33 +325,39 @@ pub fn view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
         .filter(|k| app.keyboard.live_down(*k))
         .collect();
     let held = if live.is_empty() {
-        "play a MIDI keyboard, or TAB for keys mode".to_string()
+        "play a MIDI keyboard, click the keys, or TAB for keys mode".to_string()
     } else {
         live.iter().map(|k| name(*k)).collect::<Vec<_>>().join(" ")
+    };
+    let sound = if app.settings.pad_keys {
+        app.pad_name(app.group, app.pad)
+    } else {
+        app.project.groups[app.group].keys.patch.clone()
     };
     painter.text(
         body.left_top(),
         Align2::LEFT_TOP,
-        "KEYS",
+        format!("KEYS {}  {sound}", (b'A' + app.group as u8) as char),
         l.f(11.0),
         SCREEN_INK,
     );
+    let legend_y = browser.max.y + l.s(2.0);
     painter.text(
-        body.left_top() + vec2(l.s(44.0), 0.0),
+        pos2(body.min.x, legend_y),
         Align2::LEFT_TOP,
         held,
-        l.f(11.0),
+        l.f(10.0),
         if live.is_empty() { SCREEN_DIM } else { ORANGE },
     );
     painter.text(
-        body.right_top(),
+        pos2(body.max.x, legend_y),
         Align2::RIGHT_TOP,
         "LIVE",
         l.f(9.0),
         ORANGE,
     );
     painter.text(
-        body.right_top() + vec2(-l.s(36.0), 0.0),
+        pos2(body.max.x - l.s(36.0), legend_y),
         Align2::RIGHT_TOP,
         "PLAYBACK",
         l.f(9.0),
@@ -280,6 +429,30 @@ pub fn view(app: &mut App, ui: &Ui, l: &L, body: Rect) {
             Stroke::new(l.s(0.8), SCREEN_DIM),
             StrokeKind::Inside,
         );
+    }
+    let resp = ui.interact(keys, Id::unique("keys-board"), Sense::click_and_drag());
+    if resp.is_pointer_button_down_on()
+        && app.mouse.is_none()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let hit = |k: u8, tall: f32| {
+            Rect::from_min_size(
+                pos2(x_of[k as usize], keys.min.y),
+                vec2(w_of[k as usize], keys.height() * tall),
+            )
+            .contains(p)
+        };
+        let key = (low..=high)
+            .filter(|k| black(*k))
+            .find(|k| hit(*k, 0.6))
+            .or_else(|| (low..=high).filter(|k| !black(*k)).find(|k| hit(*k, 1.0)));
+        if let Some(k) = key {
+            let note = (k as i32 - MIDDLE_C).clamp(-48, 48) as i8;
+            let velocity = 0.5 + 0.4 * ((p.y - keys.min.y) / keys.height()).clamp(0.0, 1.0);
+            let (g, pad) = (app.group, app.piano_pad());
+            app.press(g, pad, note, velocity, false, true);
+            app.mouse = Some((g, pad, note));
+        }
     }
 }
 

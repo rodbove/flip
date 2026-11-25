@@ -13,11 +13,13 @@ Read the tutorial at https://rodbove.github.io/flip/.
 - 12 moods load a full set of sounds into the 4 groups: DUSTY, CLUB, TRAP, DREAM, FUNK, CHIP, ORGANIC, DARK, CARIOCA, BOSSA, SAMBA and MPB. Each mood also has a demo beat and bass line. DICE changes one pad to a new sound in the same mood.
 - The KO screen imports the EP-133 KO II factory pack (a `.pak` file from teenage engineering). It loads the 5 factory kits and lets you browse the 309 factory sounds by category.
 - The KEYS screen shows a keyboard with the keys you play (orange) and the recorded notes that play back (blue), with a trail of recent notes.
+- Each group has a keys patch for a MIDI keyboard. The KEYS screen lists 76 patches in 8 categories: PIANO, ORGAN, STRINGS, PAD, LEAD, BASS, MALLET and PLUCK. Examples are grand piano, tine and reed electric pianos, clav, tonewheel and pipe organs, string machine, warm pad, supersaw, acid bass and FM bells.
+- Each keys patch has its own effects: drive, phaser, chorus, rotary speaker, tremolo, tempo delay and reverb.
 - A preset browser with more than 40 factory sounds. Save your own sounds as presets.
 - Each pad has a start and end point, pitch, an envelope, a filter, pan and a choke group.
 - Play modes: one shot, gate and loop.
 - DIRT on each pad: drive, bit crush, sample rate reduction and a dry/wet mix.
-- An FX bus with one effect: delay (synced to the tempo), reverb, drive, chorus or compressor. Each group has a send to the bus.
+- An effects bus (BUS page) with one effect: delay (synced to the tempo), reverb, drive, chorus or compressor. Each group has a send to the bus.
 - 8 punch-in effects change the full mix while you hold them: loops of 1/4, 1/8, 1/16 and 1/32, echo, low sweep, high sweep and reverse.
 - The group fader has 5 modes: VOL, PITCH, FILT (low pass down, high pass up), SEND and PAN.
 - 16 patterns for each group. Each pattern has 1 to 256 steps (up to 16 bars). When a pattern gets longer, its loop repeats into the new bars.
@@ -45,9 +47,27 @@ On macOS:
 
 The script builds the app and copies `Flip.app` to `/Applications`. If that folder is not writable, it uses `~/Applications`.
 
+On Linux (Arch example, PipeWire desktop):
+
+1. Install Rust and the build packages: `sudo pacman -S rustup base-devel alsa-lib pipewire-jack realtime-privileges`.
+2. Add your user to the realtime group: `sudo usermod -aG realtime $USER`.
+3. Log out and log in again.
+4. Run `./scripts/install.sh`.
+5. Open Flip from the app menu, or run `flip`.
+
+The script installs `~/.local/bin/flip` and a menu entry. Flip plays through PipeWire's JACK layer with a 256-sample buffer. Without `pipewire-jack`, Flip uses ALSA.
+
+When you do not select a device, Flip uses the PipeWire default output and input. Select a device in SETUP to use a different one.
+
+If Flip shows "the desktop portal grants no realtime time", log out and log in again, or run `systemctl --user restart xdg-desktop-portal`.
+
+On a tiling window manager, make the window float. For xmonad, add `className =? "flip" --> doFloat` to the manage hook.
+
 ## Run from source
 
 Run `cargo run --release`.
+
+To measure the speed of the sound engine, run `cargo run --release -p flip-engine --example bench`. The benchmark plays each mood for 10 seconds, then plays a stress test with 32 held keys notes. It does not need an audio device. LOAD is the part of the time limit of a 256-frame block that the engine uses. Keep WORST under 100%.
 
 To save a screenshot, set `FLIP_SHOT` to a `.tga` path. Set `FLIP_MOOD` to load a mood and its beat first, for example `FLIP_SHOT=shot.tga FLIP_MOOD=samba cargo run --release`.
 
@@ -55,7 +75,7 @@ To save a screenshot, set `FLIP_SHOT` to a `.tga` path. Set `FLIP_MOOD` to load 
 
 Flip has no window frame. It looks like a device on your desktop.
 
-- Drag an empty part of the body to move it.
+- Drag an empty part of the body to move it. Some X11 window managers, such as xmonad, ignore this. Use the window manager's move key instead (for example Mod and drag).
 - Drag the ridges in the bottom-right corner to resize it.
 - Push HIDE to minimize it. Push OFF to quit.
 
@@ -96,7 +116,7 @@ Mouse:
 - Drag a knob up or down. Hold Shift for small changes.
 - Double-click a knob to reset it.
 - Click the label under the group fader to change the fader mode. Double-click the fader to reset it.
-- On the FX page, hold a cell on the screen to use a punch-in effect.
+- On the BUS page, hold a cell on the screen to use a punch-in effect.
 - Turn MONITOR (bottom row, left of STEP PAGE) up to hear the audio input. Turn it fully down to stop.
 - Right-click a knob, then move a MIDI control to map it.
 - Right-click a group to mute it.
@@ -106,8 +126,9 @@ Mouse:
 ## MIDI
 
 - Notes 36 to 51 play the 16 pads. Note 36 is the bottom-left pad.
-- Other notes play the selected pad at that pitch.
-- In keys mode, all notes play the selected pad.
+- Other notes play the keys patch of the selected group.
+- In keys mode, all notes play the keys patch.
+- On the KEYS screen, click PLAYS PATCH to play the selected pad instead. Click it again to go back to the patch.
 - When you record, notes from keys mode and notes outside 36 to 51 go into the note track of the pattern. Pad notes go into the steps.
 - The sustain pedal (CC 64) holds the notes and makes the recorded notes longer.
 
@@ -116,7 +137,11 @@ Mouse:
 1. Connect the USB TO HOST port of the keyboard to the computer.
 2. Open SETUP and select the keyboard as the MIDI port.
 3. Turn the keyboard volume down, or set Local Control off, so you hear only Flip.
-4. Push Tab for keys mode, so all keys play the selected pad.
+4. Push Tab for keys mode, so all keys play the keys patch.
+5. Push - for the KEYS screen. Click a category, then click a patch.
+6. Push , or . to try the previous or next patch.
+7. On the KEYS screen, the knob pages are VOICE, ENV, FILTER, SYNTH, FX and SPACE. They edit the keys patch. FX has drive, phaser, chorus and rotary. SPACE has tremolo, delay, delay time and reverb.
+8. In the ROLL screen, click KEYS to edit the recorded keys notes.
 
 ## KO II factory pack
 
@@ -132,8 +157,8 @@ The import copies the sounds to `~/Music/Flip/Factory`. Each kit keeps the KO II
 
 ## Effects
 
-1. Push FX to show the FX page. The knobs set TYPE, the two effect controls and SEND for the current group.
-2. Push FX again to show the DIRT knobs of the selected pad: DRIVE, BITS, RATE and MIX.
+1. Push BUS to show the BUS page. The knobs set TYPE, the two effect controls and SEND for the current group.
+2. Push BUS again to show the DIRT knobs of the selected pad: DRIVE, BITS, RATE and MIX.
 3. Hold a cell on the screen, or hold Option and a pad key, to use a punch-in effect. Release it to stop.
 
 The punch-in effects also go into a resample of the master output.
@@ -144,4 +169,4 @@ Presets save to `~/Music/Flip/presets` as JSON files. A preset keeps the sound o
 
 ## Projects
 
-A project is a folder. It contains `project.json` and a `samples` folder with WAV files. Projects save to `~/Music/Flip` by default.
+A project is a folder. It contains `project.json` and a `samples` folder with WAV files. Projects save to `~/Music/Flip` by default. On Linux, Flip uses your XDG music folder.

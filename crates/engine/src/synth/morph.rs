@@ -38,13 +38,22 @@ fn drive(x: f32, amount: f32) -> f32 {
 pub fn next(m: &Morph, s: &mut State, hz: f32, rate: f32, rng: &mut Rng) -> f32 {
     let (i, t) = blend(m.position);
     let voices = if m.spread > UNISON { 3 } else { 1 };
-    let detune = [0.0, m.spread, -m.spread];
+    let up = if voices > 1 {
+        dsp::semis(m.spread)
+    } else {
+        1.0
+    };
+    let ratios = [1.0, up, 1.0 / up];
+    let base = hz / rate;
     let mut sum = 0.0;
-    for (phase, semis) in s.phase.iter_mut().zip(detune).take(voices) {
-        let dt = (hz * dsp::semis(semis) / rate).min(0.5);
+    for (phase, ratio) in s.phase.iter_mut().zip(ratios).take(voices) {
+        let dt = (base * ratio).min(0.5);
         let a = dsp::osc(WAVES[i], *phase, dt, rng);
-        let b = dsp::osc(WAVES[i + 1], *phase, dt, rng);
-        sum += a + (b - a) * t;
+        sum += if t > 0.0 {
+            a + (dsp::osc(WAVES[i + 1], *phase, dt, rng) - a) * t
+        } else {
+            a
+        };
         *phase = (*phase + dt).fract();
     }
     let mut x = sum / (voices as f32).sqrt();

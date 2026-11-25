@@ -1,7 +1,10 @@
+pub mod bus;
 pub mod chop;
+pub mod denormal;
 pub mod dsp;
 pub mod engine;
 pub mod fx;
+pub mod keys;
 pub mod kit;
 pub mod live;
 pub mod mood;
@@ -14,7 +17,8 @@ pub mod store;
 pub mod synth;
 
 pub use engine::{Bounce, Command, Engine, Report, Tap, Trash, bounce};
-pub use fx::{Fx, FxKind};
+pub use bus::{BusFx, BusKind};
+pub use keys::{KEYS, Keys};
 pub use live::{Remote, Runner, Status, Timing, live};
 pub use project::*;
 pub use punch::PUNCHES;

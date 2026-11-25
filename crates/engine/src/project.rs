@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::keys::{KEYS, Keys};
 use crate::sample::Sample;
 
 pub const GROUPS: usize = 4;
@@ -509,7 +510,7 @@ impl<'de> Deserialize<'de> for Pattern {
         pattern.notes = file
             .clip
             .into_iter()
-            .filter(|n| (n.pad as usize) < PADS && n.start < ticks)
+            .filter(|n| (n.pad as usize) <= KEYS && n.start < ticks)
             .map(|n| Note {
                 length: n.length.max(1),
                 ..n
@@ -528,10 +529,21 @@ pub struct Group {
     pub pattern: usize,
     pub volume: f32,
     pub mute: bool,
+    pub keys: Keys,
     pub pitch: f32,
     pub tone: f32,
     pub pan: f32,
     pub send: f32,
+}
+
+impl Group {
+    pub fn sound(&self, pad: usize) -> &Pad {
+        if pad == KEYS {
+            &self.keys.sound
+        } else {
+            &self.pads[pad]
+        }
+    }
 }
 
 impl Default for Group {
@@ -542,6 +554,7 @@ impl Default for Group {
             pattern: 0,
             volume: 0.8,
             mute: false,
+            keys: Keys::default(),
             pitch: 0.0,
             tone: 0.0,
             pan: 0.0,
@@ -593,7 +606,7 @@ pub struct Project {
     pub song: Vec<[usize; GROUPS]>,
     pub song_mode: bool,
     pub mood: String,
-    pub fx: crate::fx::Fx,
+    pub bus: crate::bus::BusFx,
 }
 
 impl Default for Project {
@@ -607,7 +620,7 @@ impl Default for Project {
             song: Vec::new(),
             song_mode: false,
             mood: String::new(),
-            fx: crate::fx::Fx::default(),
+            bus: crate::bus::BusFx::default(),
         }
     }
 }

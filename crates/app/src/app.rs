@@ -6,14 +6,14 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 use flip_engine::project::LENGTHS;
 use flip_engine::{
-    Bounce, Command, GROUPS, Note, PADS, Pad, Project, Report, STEPS, Sample, Source, Step, TICKS,
-    Tap, chop, mood, pak, sample, store,
+    Bounce, Command, GROUPS, KEYS, Note, PADS, Pad, Project, Report, STEPS, Sample, Source, Step,
+    TICKS, Tap, chop, keys as patches, mood, pak, sample, store,
 };
 
 use crate::audio::{self, Input, Output, Sender};
 use crate::keyview::{self, Keyboard};
 use crate::midi::{self, Midi, Route};
-use crate::params::{self, PAGES, Param, Target};
+use crate::params::{self, KEYS_PAGES, PAGES, Param, Target};
 use crate::presets::{self, Library};
 use crate::record;
 use crate::settings::Settings;
@@ -139,6 +139,8 @@ pub struct App {
     pub ko_category: usize,
     pub ko_page: usize,
     pub ko_scroll: f32,
+    pub keys_category: usize,
+    pub roll_keys: bool,
     pub ctx: egui::Context,
     title: String,
 }
@@ -199,6 +201,8 @@ impl App {
             ko_category: 0,
             ko_page: 0,
             ko_scroll: 0.0,
+            keys_category: 0,
+            roll_keys: false,
             ctx,
             title: String::new(),
         };
@@ -213,12 +217,16 @@ impl App {
                 Err(e) => app.say(format!("could not open last project: {e}")),
             }
         }
+        app.route
+            .pad_keys
+            .store(app.settings.pad_keys, Ordering::Relaxed);
+        app.keys_category = app.patch_category();
         app.open_output(app.settings.output.clone());
         let wanted = app
             .settings
             .midi
             .clone()
-            .or_else(|| midi::ports().into_iter().next());
+            .or_else(|| midi::wanted(&midi::ports()));
         if let Some(port) = wanted {
             app.connect_midi(&port);
         }
@@ -358,6 +366,81 @@ impl App {
         &self.project.groups[self.group].pads[self.pad]
     }
 
+    pub fn on_keys(&self) -> bool {
+        self.view == View::Keys && !self.browser && !self.help && self.capture.take == Take::Idle
+    }
+
+    pub fn sound(&self) -> &Pad {
+        if self.on_keys() {
+            &self.project.groups[self.group].keys.sound
+        } else {
+            self.current_pad()
+        }
+    }
+
+    pub fn sync_keys(&self, group: usize) {
+        self.send(Command::Keys {
+            group,
+            data: Box::new(self.project.groups[group].keys.clone()),
+        });
+    }
+
+    pub fn piano_pad(&self) -> usize {
+        if self.view == View::Keys && !self.settings.pad_keys {
+            KEYS
+        } else {
+            self.pad
+        }
+    }
+
+    pub fn roll_pad(&self) -> usize {
+        if self.roll_keys { KEYS } else { self.pad }
+    }
+
+    pub fn patch_category(&self) -> usize {
+        patches::find(&self.project.groups[self.group].keys.patch)
+            .map(|i| patches::PATCHES[i].category)
+            .unwrap_or(0)
+    }
+
+    pub fn load_patch(&mut self, index: usize) {
+        let Some(patch) = patches::PATCHES.get(index) else {
+            return;
+        };
+        self.remember();
+        let g = self.group;
+        self.project.groups[g].keys = patch.keys.clone();
+        self.sync_keys(g);
+        self.keys_category = patch.category;
+        self.sub = 0;
+        if self.settings.pad_keys {
+            self.set_pad_keys(false);
+        }
+        self.say(format!(
+            "{} keys: {}",
+            (b'A' + g as u8) as char,
+            patch.name.to_lowercase()
+        ));
+    }
+
+    pub fn step_patch(&mut self, delta: i32) {
+        let current = patches::find(&self.project.groups[self.group].keys.patch);
+        let list = patches::in_category(self.keys_category);
+        if list.is_empty() {
+            return;
+        }
+        let at = current
+            .and_then(|c| list.iter().position(|i| *i == c))
+            .map(|p| (p as i32 + delta).rem_euclid(list.len() as i32) as usize)
+            .unwrap_or(0);
+        self.load_patch(list[at]);
+    }
+
+    pub fn set_pad_keys(&mut self, on: bool) {
+        self.settings.pad_keys = on;
+        self.route.pad_keys.store(on, Ordering::Relaxed);
+    }
+
     pub fn editing(&self) -> usize {
         self.project.groups[self.group].pattern
     }
@@ -365,6 +448,7 @@ impl App {
     pub fn select_group(&mut self, g: usize) {
         self.group = g.min(GROUPS - 1);
         self.route.group.store(self.group, Ordering::Relaxed);
+        self.keys_category = self.patch_category();
     }
 
     pub fn select_pad(&mut self, p: usize) {
@@ -569,13 +653,13 @@ impl App {
         });
     }
 
-    fn set_fx(&mut self, f: impl FnOnce(&mut flip_engine::Fx)) {
-        f(&mut self.project.fx);
-        self.send(Command::Fx(self.project.fx));
+    fn set_fx(&mut self, f: impl FnOnce(&mut flip_engine::BusFx)) {
+        f(&mut self.project.bus);
+        self.send(Command::Bus(self.project.bus));
     }
 
     pub fn knob_label(&self, p: Param) -> &'static str {
-        let names = params::fx_names(self.project.fx.kind);
+        let names = params::fx_names(self.project.bus.kind);
         match p {
             Param::FxA => names[0],
             Param::FxB => names[1],
@@ -585,8 +669,8 @@ impl App {
 
     pub fn knob_text(&self, p: Param, v: f32) -> String {
         match p {
-            Param::FxA => params::fx_text(self.project.fx.kind, true, v),
-            Param::FxB => params::fx_text(self.project.fx.kind, false, v),
+            Param::FxA => params::fx_text(self.project.bus.kind, true, v),
+            Param::FxB => params::fx_text(self.project.bus.kind, false, v),
             _ => p.text(v),
         }
     }
@@ -611,6 +695,12 @@ impl App {
             if melodic {
                 self.keyboard.press(keyview::key_of(note), self.now);
             }
+        }
+        if pad >= PADS {
+            if self.rec_seq && self.report.playing {
+                self.open_note(group, pad, note, velocity);
+            }
+            return;
         }
         self.flashes[group][pad] = self.now;
         if group == self.group && !self.keys {
@@ -701,7 +791,7 @@ impl App {
 
     pub fn quantize_notes(&mut self) {
         let grid = record::grid(self.settings.quantize);
-        let (g, i, pad) = (self.group, self.editing(), self.pad);
+        let (g, i, pad) = (self.group, self.editing(), self.roll_pad());
         if grid <= 1
             || !self.project.groups[g].patterns[i]
                 .notes
@@ -730,7 +820,7 @@ impl App {
                 velocity: 0.0,
                 on: false,
             });
-            if self.keys {
+            if self.keys || pad == KEYS || self.view == View::Keys {
                 self.keyboard.release(keyview::key_of(note), self.now);
             }
         }
@@ -789,13 +879,17 @@ impl App {
     }
 
     pub fn pad_name(&self, g: usize, p: usize) -> String {
+        if p >= PADS {
+            return format!("{}-KEYS", (b'A' + g as u8) as char);
+        }
         format!("{}-{:02}", (b'A' + g as u8) as char, p + 1)
     }
 
     pub fn param(&self, p: Param) -> Option<f32> {
-        let pad = self.current_pad();
+        let pad = self.sound();
         match p.target() {
             Target::Pad => p.applies(pad).then(|| p.pad_get(pad)),
+            Target::Keys => Some(p.keys_get(&self.project.groups[self.group].keys)),
             Target::Step => {
                 let step = self.step?;
                 let s = self.project.pattern(self.group).step(self.pad, step);
@@ -810,12 +904,12 @@ impl App {
                 Param::Threshold => self.settings.threshold,
                 Param::Capture => self.source as f32,
                 Param::Monitor => self.settings.monitor,
-                Param::FxType => flip_engine::FxKind::ALL
+                Param::FxType => flip_engine::BusKind::ALL
                     .iter()
-                    .position(|k| *k == self.project.fx.kind)
+                    .position(|k| *k == self.project.bus.kind)
                     .unwrap_or(0) as f32,
-                Param::FxA => self.project.fx.a,
-                Param::FxB => self.project.fx.b,
+                Param::FxA => self.project.bus.a,
+                Param::FxB => self.project.bus.b,
                 Param::Send => self.project.groups[self.group].send,
                 Param::GroupPitch => self.project.groups[self.group].pitch,
                 Param::GroupTone => self.project.groups[self.group].tone,
@@ -828,9 +922,18 @@ impl App {
     pub fn set_param(&mut self, p: Param, v: f32) {
         let (g, pad) = (self.group, self.pad);
         match p.target() {
+            Target::Pad if self.on_keys() => {
+                let v = if p == Param::Source { v.max(1.0) } else { v };
+                p.pad_set(&mut self.project.groups[g].keys.sound, v);
+                self.sync_keys(g);
+            }
             Target::Pad => {
                 p.pad_set(&mut self.project.groups[g].pads[pad], v);
                 self.sync_pad(g, pad);
+            }
+            Target::Keys => {
+                p.keys_set(&mut self.project.groups[g].keys, v);
+                self.sync_keys(g);
             }
             Target::Step => {
                 let Some(step) = self.step else {
@@ -877,8 +980,8 @@ impl App {
                     self.sync_mix(g);
                 }
                 Param::FxType => {
-                    let i = (v.round().max(0.0) as usize).min(flip_engine::FxKind::ALL.len() - 1);
-                    self.set_fx(|fx| fx.kind = flip_engine::FxKind::ALL[i]);
+                    let i = (v.round().max(0.0) as usize).min(flip_engine::BusKind::ALL.len() - 1);
+                    self.set_fx(|fx| fx.kind = flip_engine::BusKind::ALL[i]);
                 }
                 Param::FxA => self.set_fx(|fx| fx.a = v),
                 Param::FxB => self.set_fx(|fx| fx.b = v),
@@ -896,9 +999,11 @@ impl App {
 
     pub fn page_params(&self) -> [Param; 4] {
         if self.page == params::SYNTH_PAGE {
-            params::synth_page(self.current_pad().source, self.sub).1
+            params::synth_page(self.sound().source, self.sub).1
         } else if self.page == params::FX_PAGE {
             params::fx_page(self.fx_sub).1
+        } else if self.on_keys() && self.page < KEYS_PAGES.len() {
+            KEYS_PAGES[self.page].1
         } else {
             PAGES[self.page].1
         }
@@ -917,6 +1022,10 @@ impl App {
     }
 
     pub fn step_preset(&mut self, delta: i32) {
+        if self.on_keys() {
+            self.step_patch(delta);
+            return;
+        }
         self.library.move_cursor(delta);
         if let Some(i) = self.library.selected() {
             self.load_preset(i);
@@ -940,9 +1049,11 @@ impl App {
 
     pub fn page_name(&self, page: usize) -> String {
         if page == params::SYNTH_PAGE {
-            params::synth_page(self.current_pad().source, self.sub).0
+            params::synth_page(self.sound().source, self.sub).0
         } else if page == params::FX_PAGE {
             params::fx_page(self.fx_sub).0.into()
+        } else if self.on_keys() && page < KEYS_PAGES.len() {
+            KEYS_PAGES[page].0.into()
         } else {
             PAGES[page].0.into()
         }
@@ -950,7 +1061,7 @@ impl App {
 
     pub fn open_page(&mut self, page: usize) {
         if page == params::SYNTH_PAGE && self.page == page {
-            let count = params::synth_pages(self.current_pad().source);
+            let count = params::synth_pages(self.sound().source);
             self.sub = (self.sub + 1) % count;
         }
         if page == params::FX_PAGE && self.page == page {

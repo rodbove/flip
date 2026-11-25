@@ -208,6 +208,7 @@ pub fn live(project: Project, rate: u32) -> (Runner, Remote) {
 
 impl Runner {
     pub fn process(&mut self, out: &mut [f32], channels: usize) {
+        let _ftz = crate::denormal::NoDenormals::new();
         while let Ok(command) = self.commands.pop() {
             match command {
                 Command::Listen { input, rate } => {
@@ -241,10 +242,9 @@ impl Runner {
                 }
             }
         }
-        for t in self.engine.take_trash() {
-            if self.trash.push(t).is_err() {
-                break;
-            }
+        let room = self.trash.slots();
+        for t in self.engine.take_trash(room) {
+            let _ = self.trash.push(t);
         }
         self.status.publish(&self.engine.report());
     }

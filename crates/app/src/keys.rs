@@ -61,7 +61,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("BACKSPACE", "clear pad steps"),
     ("CMD Z S O E", "undo save open export"),
     ("P / SHIFT P", "presets / save preset"),
-    (", .", "previous / next preset"),
+    (", .", "previous / next preset or keys patch"),
     ("OPT + 1-4 Q-R", "hold: punch-in fx"),
     ("ESC", "cancel / close"),
     ("/", "this help"),
@@ -87,7 +87,7 @@ fn digit(key: Key) -> Option<char> {
 fn note_for(app: &App, key: Key) -> Option<(usize, usize, i8)> {
     if app.keys {
         let (_, semis) = PIANO.iter().find(|(k, _)| *k == key)?;
-        Some((app.group, app.pad, semis + app.octave * 12))
+        Some((app.group, app.piano_pad(), semis + app.octave * 12))
     } else {
         let pad = PAD_KEYS.iter().position(|k| *k == key)?;
         Some((app.group, pad, 0))

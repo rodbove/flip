@@ -1,5 +1,7 @@
 mod app;
 mod audio;
+#[cfg(target_os = "linux")]
+mod jack_audio;
 mod keys;
 mod keyview;
 mod midi;
