@@ -2,7 +2,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::midi::{Kind, PadNote};
 use crate::params::Param;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Device {
+    pub name: String,
+    pub kind: Kind,
+    pub notes: Vec<PadNote>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,6 +27,7 @@ pub struct Settings {
     pub monitor: f32,
     pub fader: usize,
     pub pad_keys: bool,
+    pub devices: Vec<Device>,
 }
 
 impl Default for Settings {
@@ -34,6 +44,7 @@ impl Default for Settings {
             monitor: 0.0,
             fader: 0,
             pad_keys: false,
+            devices: Vec::new(),
         }
     }
 }
@@ -117,11 +128,76 @@ impl Settings {
         self.learned.retain(|(c, p)| *c != cc && *p != param);
         self.learned.push((cc, param));
     }
+
+    pub fn device(&mut self, name: &str) -> &mut Device {
+        let at = match self.devices.iter().position(|d| d.name == name) {
+            Some(i) => i,
+            None => {
+                self.devices.push(Device {
+                    name: name.to_string(),
+                    kind: crate::midi::guess(name),
+                    notes: Vec::new(),
+                });
+                self.devices.len() - 1
+            }
+        };
+        &mut self.devices[at]
+    }
+}
+
+impl Device {
+    pub fn learn(&mut self, channel: u8, note: u8, pad: usize) {
+        self.notes
+            .retain(|&(c, n, p)| (c, n) != (channel, note) && p != pad);
+        self.notes.push((channel, note, pad));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod when_a_device_connects {
+        use super::*;
+
+        mod for_the_first_time {
+            use super::*;
+
+            #[test]
+            fn guesses_its_kind_from_the_name() {
+                let mut s = Settings::default();
+                assert_eq!(s.device("EP-133:EP-133 MIDI 1").kind, Kind::Pads);
+                assert_eq!(s.device("Digital Keyboard").kind, Kind::Keyboard);
+                assert_eq!(s.devices.len(), 2);
+            }
+        }
+
+        mod again {
+            use super::*;
+
+            #[test]
+            fn keeps_the_chosen_kind() {
+                let mut s = Settings::default();
+                s.device("Digital Keyboard").kind = Kind::Pads;
+                assert_eq!(s.device("Digital Keyboard").kind, Kind::Pads);
+                assert_eq!(s.devices.len(), 1);
+            }
+        }
+    }
+
+    mod when_learning_a_pad_note {
+        use super::*;
+
+        #[test]
+        fn replaces_the_old_note_of_that_pad_and_the_old_pad_of_that_note() {
+            let mut d = Device::default();
+            d.learn(0, 36, 1);
+            d.learn(0, 37, 2);
+            d.learn(0, 38, 1);
+            d.learn(0, 37, 5);
+            assert_eq!(d.notes, vec![(0, 38, 1), (0, 37, 5)]);
+        }
+    }
 
     mod when_reading_the_music_folder {
         use super::*;

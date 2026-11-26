@@ -126,6 +126,7 @@ Mouse:
 ## MIDI
 
 - Notes 36 to 51 play the 16 pads. Note 36 is the bottom-left pad.
+- Notes that you map with LEARN PADS play their pads. See below.
 - Other notes play the keys patch of the selected group.
 - In keys mode, all notes play the keys patch.
 - On the KEYS screen, click PLAYS PATCH to play the selected pad instead. Click it again to go back to the patch.
@@ -142,6 +143,20 @@ Mouse:
 6. Push , or . to try the previous or next patch.
 7. On the KEYS screen, the knob pages are VOICE, ENV, FILTER, SYNTH, FX and SPACE. They edit the keys patch. FX has drive, phaser, chorus and rotary. SPACE has tremolo, delay, delay time and reverb.
 8. In the ROLL screen, click KEYS to edit the recorded keys notes.
+
+### Use a pad controller such as the KO II
+
+Flip keeps a TYPE and a pad map for each MIDI device. A device of type KEYBOARD opens the KEYS screen at its first note. A device of type PADS does not. Flip sets the type from the device name. Device names with words such as EP-133, KO II, MPD or pad get PADS.
+
+1. Connect the device to the computer.
+2. Open SETUP and select the device as the MIDI port.
+3. Make sure TYPE is PADS. If it is not, click PADS.
+4. Click LEARN PADS. Pad 01 blinks.
+5. Hit the device pad that must play pad 01. The next pad blinks.
+6. Hit the device pads in turn. To skip to a different pad, click that pad on the screen.
+7. Push Esc when you are done. The KO II has 12 pads, so stop after 12.
+
+A learned note plays its pad in the selected group. Flip keeps the MIDI channel of each note, so the same note on a different channel does not play the pad. Learned notes go into the steps when you record. Click CLEAR in SETUP to remove the pad map of the device.
 
 ## KO II factory pack
 

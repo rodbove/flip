@@ -1,22 +1,111 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender as Channel, channel};
 
 use flip_engine::{Command, KEYS, PADS};
 use midir::{MidiInput, MidiInputConnection};
+use serde::{Deserialize, Serialize};
 
 use crate::audio::Sender;
 
 const CLIENT: &str = "flip";
 const FIRST_PAD: u8 = 36;
 const MIDDLE_C: i32 = 60;
+const CHANNELS: usize = 16;
+const NOTES: usize = 128;
+const PAD_WORDS: [&str; 12] = [
+    "ep-133",
+    "ep-1320",
+    "ko ii",
+    "ko-ii",
+    "ko2",
+    "pad",
+    "drum",
+    "mpc",
+    "mpd",
+    "maschine",
+    "launchpad",
+    "beatstep",
+];
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Kind {
+    #[default]
+    Keyboard,
+    Pads,
+}
+
+pub fn guess(port: &str) -> Kind {
+    let name = port.to_lowercase();
+    if PAD_WORDS.iter().any(|w| name.contains(w)) {
+        Kind::Pads
+    } else {
+        Kind::Keyboard
+    }
+}
+
+pub fn device_name(port: &str) -> String {
+    let trimmed = port.trim_end();
+    match trimmed.rsplit_once(' ') {
+        Some((head, tail))
+            if tail
+                .split_once(':')
+                .is_some_and(|(a, b)| is_number(a) && is_number(b)) =>
+        {
+            head.trim_end().to_string()
+        }
+        _ => trimmed.to_string(),
+    }
+}
+
+fn is_number(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+pub type PadNote = (u8, u8, usize);
+
 pub struct Route {
     pub group: AtomicUsize,
     pub pad: AtomicUsize,
     pub keys: AtomicBool,
     pub pad_keys: AtomicBool,
+    pub learning: AtomicBool,
+    notes: Box<[AtomicU8]>,
+}
+
+impl Default for Route {
+    fn default() -> Self {
+        Self {
+            group: AtomicUsize::new(0),
+            pad: AtomicUsize::new(0),
+            keys: AtomicBool::new(false),
+            pad_keys: AtomicBool::new(false),
+            learning: AtomicBool::new(false),
+            notes: (0..CHANNELS * NOTES).map(|_| AtomicU8::new(0)).collect(),
+        }
+    }
+}
+
+impl Route {
+    pub fn set_notes(&self, map: &[PadNote]) {
+        for n in self.notes.iter() {
+            n.store(0, Ordering::Relaxed);
+        }
+        for &(channel, note, pad) in map {
+            let (c, n) = (channel as usize, note as usize);
+            if c < CHANNELS && n < NOTES && pad < PADS {
+                self.notes[c * NOTES + n].store(pad as u8 + 1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn learned(&self, channel: u8, note: u8) -> Option<usize> {
+        let at = (channel as usize % CHANNELS) * NOTES + (note as usize % NOTES);
+        match self.notes[at].load(Ordering::Relaxed) {
+            0 => None,
+            p => Some(p as usize - 1),
+        }
+    }
 }
 
 const SUSTAIN: u8 = 64;
@@ -36,6 +125,10 @@ pub enum Event {
         cc: u8,
         value: u8,
     },
+    Learn {
+        channel: u8,
+        key: u8,
+    },
 }
 
 pub fn pad_for(note: u8) -> Option<usize> {
@@ -47,16 +140,21 @@ pub fn pad_for(note: u8) -> Option<usize> {
     Some(row * 4 + n % 4)
 }
 
-pub fn melodic(route: &Route, note: u8) -> bool {
-    route.keys.load(Ordering::Relaxed) || pad_for(note).is_none()
+fn pad_of(route: &Route, channel: u8, note: u8) -> Option<usize> {
+    if route.keys.load(Ordering::Relaxed) {
+        return None;
+    }
+    route.learned(channel, note).or_else(|| pad_for(note))
 }
 
-pub fn map(route: &Route, note: u8) -> (usize, usize, i8) {
+pub fn melodic(route: &Route, channel: u8, note: u8) -> bool {
+    pad_of(route, channel, note).is_none()
+}
+
+pub fn map(route: &Route, channel: u8, note: u8) -> (usize, usize, i8) {
     let group = route.group.load(Ordering::Relaxed);
     let selected = route.pad.load(Ordering::Relaxed);
-    if !route.keys.load(Ordering::Relaxed)
-        && let Some(pad) = pad_for(note)
-    {
+    if let Some(pad) = pad_of(route, channel, note) {
         return (group, pad, 0);
     }
     let offset = (note as i32 - MIDDLE_C).clamp(-48, 48) as i8;
@@ -70,12 +168,16 @@ pub fn map(route: &Route, note: u8) -> (usize, usize, i8) {
 
 pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
     let (&status, rest) = bytes.split_first()?;
+    let channel = status & 0x0F;
     match (status & 0xF0, rest) {
         (0x90, [note, vel, ..]) | (0x80, [note, vel, ..]) => {
             let on = status & 0xF0 == 0x90 && *vel > 0;
             let key = *note;
-            let melodic = melodic(route, *note);
-            let (group, pad, note) = map(route, *note);
+            if route.learning.load(Ordering::Relaxed) {
+                return on.then_some(Event::Learn { channel, key });
+            }
+            let melodic = melodic(route, channel, *note);
+            let (group, pad, note) = map(route, channel, *note);
             Some(Event::Note {
                 group,
                 pad,
@@ -273,8 +375,8 @@ mod tests {
         fn plays_other_notes_on_the_keys_patch() {
             let route = Route::default();
             route.pad.store(5, Ordering::Relaxed);
-            assert_eq!(map(&route, 64), (0, KEYS, 4));
-            assert_eq!(map(&route, 36), (0, 12, 0));
+            assert_eq!(map(&route, 0, 64), (0, KEYS, 4));
+            assert_eq!(map(&route, 0, 36), (0, 12, 0));
         }
     }
 
@@ -286,7 +388,7 @@ mod tests {
             let route = Route::default();
             route.keys.store(true, Ordering::Relaxed);
             route.pad.store(2, Ordering::Relaxed);
-            assert_eq!(map(&route, 36), (0, KEYS, -24));
+            assert_eq!(map(&route, 0, 36), (0, KEYS, -24));
         }
     }
 
@@ -298,9 +400,101 @@ mod tests {
             let route = Route::default();
             route.pad_keys.store(true, Ordering::Relaxed);
             route.pad.store(5, Ordering::Relaxed);
-            assert_eq!(map(&route, 64), (0, 5, 4));
+            assert_eq!(map(&route, 0, 64), (0, 5, 4));
             route.keys.store(true, Ordering::Relaxed);
-            assert_eq!(map(&route, 36), (0, 5, -24));
+            assert_eq!(map(&route, 0, 36), (0, 5, -24));
+        }
+    }
+
+    mod when_naming_a_device {
+        use super::*;
+
+        #[test]
+        fn drops_the_linux_client_numbers() {
+            assert_eq!(
+                device_name("EP-133:EP-133 MIDI 1 24:0"),
+                "EP-133:EP-133 MIDI 1"
+            );
+            assert_eq!(device_name("KO II"), "KO II");
+        }
+
+        #[test]
+        fn guesses_pad_controllers_by_name() {
+            assert_eq!(guess("EP-133:EP-133 MIDI 1 24:0"), Kind::Pads);
+            assert_eq!(guess("Akai MPD218"), Kind::Pads);
+            assert_eq!(guess("Digital Keyboard MIDI 1"), Kind::Keyboard);
+        }
+    }
+
+    mod when_a_note_is_mapped_to_a_pad {
+        use super::*;
+
+        fn route() -> Route {
+            let route = Route::default();
+            route.set_notes(&[(2, 60, 7)]);
+            route
+        }
+
+        #[test]
+        fn plays_that_pad() {
+            let route = route();
+            route.group.store(1, Ordering::Relaxed);
+            assert_eq!(map(&route, 2, 60), (1, 7, 0));
+            assert!(!melodic(&route, 2, 60));
+        }
+
+        #[test]
+        fn leaves_the_same_note_on_other_channels_alone() {
+            assert_eq!(map(&route(), 0, 60), (0, KEYS, 0));
+        }
+
+        mod when_in_keys_mode {
+            use super::*;
+
+            #[test]
+            fn plays_the_keys_patch() {
+                let route = route();
+                route.keys.store(true, Ordering::Relaxed);
+                assert_eq!(map(&route, 2, 60), (0, KEYS, 0));
+            }
+        }
+
+        mod when_the_map_is_replaced {
+            use super::*;
+
+            #[test]
+            fn forgets_the_old_notes() {
+                let route = route();
+                route.set_notes(&[]);
+                assert_eq!(map(&route, 2, 60), (0, KEYS, 0));
+            }
+        }
+    }
+
+    mod when_learning_pads {
+        use super::*;
+
+        fn route() -> Route {
+            let route = Route::default();
+            route.learning.store(true, Ordering::Relaxed);
+            route
+        }
+
+        #[test]
+        fn reports_the_hit_note_and_channel() {
+            assert_eq!(
+                parse(&route(), &[0x92, 40, 100]),
+                Some(Event::Learn {
+                    channel: 2,
+                    key: 40
+                })
+            );
+        }
+
+        #[test]
+        fn ignores_releases() {
+            assert_eq!(parse(&route(), &[0x82, 40, 0]), None);
+            assert_eq!(parse(&route(), &[0x92, 40, 0]), None);
         }
     }
 

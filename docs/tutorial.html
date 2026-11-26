@@ -169,7 +169,7 @@
       <li>Click <b>BEAT</b> to write the demo beat and bass line of the mood. This also sets the tempo and swing.</li>
       <li>Select a pad and click <b>DICE</b> (or press <kbd>L</kbd>) to get a new sound in the same mood. <kbd>Cmd</kbd> <kbd>Z</kbd> undoes it.</li>
     </ol>
-    <p class="tip">The KEYS screen (<kbd>-</kbd>) shows the keys you play in orange and the recorded notes that play back in blue. It opens by itself when a MIDI keyboard sends notes.</p>
+    <p class="tip">The KEYS screen (<kbd>-</kbd>) shows the keys you play in orange and the recorded notes that play back in blue. It opens by itself when a MIDI keyboard sends notes, but not for a device of type PADS.</p>
   </section>
 
   <section>
@@ -254,8 +254,10 @@
     <ul>
       <li>Click <span class="btn">SETUP</span> to select the MIDI port and the audio devices.</li>
       <li>Notes 36 to 51 play the pads. Note 36 is the bottom-left pad.</li>
-      <li>Other notes play the selected pad at that pitch.</li>
+      <li>Other notes play the keys patch of the selected group.</li>
       <li>To map a knob: right-click the knob, then turn a control on your controller.</li>
+      <li>To map the pads of a pad controller, such as a KO II: in <span class="btn">SETUP</span>, set TYPE to <span class="btn">PADS</span> and click <span class="btn">LEARN PADS</span>. Hit the device pads in turn while the pads on the screen blink one after the other. Click a pad on the screen to skip to it. Push <kbd>Esc</kbd> when you are done.</li>
+      <li>A device of type <span class="btn">KEYBOARD</span> opens the KEYS screen at its first note. A device of type <span class="btn">PADS</span> does not.</li>
     </ul>
   </section>
 

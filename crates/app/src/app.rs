@@ -121,6 +121,7 @@ pub struct App {
     pub flashes: [[f64; PADS]; GROUPS],
     pub toast: Option<(String, f64)>,
     pub learn: Option<Param>,
+    pub pad_learn: Option<usize>,
     pub setup: bool,
     pub help: bool,
     pub library: Library,
@@ -183,6 +184,7 @@ impl App {
             flashes: [[f64::MIN; PADS]; GROUPS],
             toast: None,
             learn: None,
+            pad_learn: None,
             setup: false,
             help: false,
             library: Library::load(),
@@ -296,6 +298,79 @@ impl App {
             Ok(()) => self.settings.midi = Some(port.to_string()),
             Err(e) => self.say(format!("midi: {e}")),
         }
+        self.stop_pad_learn();
+        self.keyboard.heard = false;
+        let notes = match self.midi_device() {
+            Some(name) => self.settings.device(&name).notes.clone(),
+            None => Vec::new(),
+        };
+        self.route.set_notes(&notes);
+    }
+
+    pub fn midi_device(&self) -> Option<String> {
+        self.midi.port.as_deref().map(midi::device_name)
+    }
+
+    pub fn midi_kind(&self) -> midi::Kind {
+        self.midi_device()
+            .and_then(|n| self.settings.devices.iter().find(|d| d.name == n))
+            .map(|d| d.kind)
+            .unwrap_or_default()
+    }
+
+    pub fn set_midi_kind(&mut self, kind: midi::Kind) {
+        if let Some(name) = self.midi_device() {
+            self.settings.device(&name).kind = kind;
+            self.settings.save();
+        }
+    }
+
+    pub fn pad_map_len(&self) -> usize {
+        self.midi_device()
+            .and_then(|n| self.settings.devices.iter().find(|d| d.name == n))
+            .map_or(0, |d| d.notes.len())
+    }
+
+    pub fn learn_pads(&mut self) {
+        if self.midi.port.is_none() {
+            self.say("connect a midi device first");
+            return;
+        }
+        self.pad_learn = Some(0);
+        self.route.learning.store(true, Ordering::Relaxed);
+        self.setup = false;
+        self.step_mode = false;
+    }
+
+    pub fn learn_pad_note(&mut self, channel: u8, key: u8) {
+        let (Some(pad), Some(name)) = (self.pad_learn, self.midi_device()) else {
+            return;
+        };
+        let device = self.settings.device(&name);
+        device.learn(channel, key, pad);
+        let notes = device.notes.clone();
+        self.route.set_notes(&notes);
+        self.settings.save();
+        self.flashes[self.group][pad] = self.now;
+        if pad + 1 < PADS {
+            self.pad_learn = Some(pad + 1);
+        } else {
+            self.stop_pad_learn();
+            self.say("pad map saved");
+        }
+    }
+
+    pub fn stop_pad_learn(&mut self) {
+        self.pad_learn = None;
+        self.route.learning.store(false, Ordering::Relaxed);
+    }
+
+    pub fn clear_pad_map(&mut self) {
+        if let Some(name) = self.midi_device() {
+            self.settings.device(&name).notes.clear();
+            self.settings.save();
+        }
+        self.route.set_notes(&[]);
     }
 
     pub fn rate(&self) -> u32 {
@@ -1501,8 +1576,10 @@ impl App {
                         self.keyboard.press(key, now);
                         if !self.keyboard.heard {
                             self.keyboard.heard = true;
-                            self.view = View::Keys;
-                            self.help = false;
+                            if self.midi_kind() == midi::Kind::Keyboard {
+                                self.view = View::Keys;
+                                self.help = false;
+                            }
                         }
                     } else {
                         self.keyboard.release(key, now);
@@ -1514,6 +1591,7 @@ impl App {
                     }
                 }
                 midi::Event::Control { cc, value } => self.control(cc, value),
+                midi::Event::Learn { channel, key } => self.learn_pad_note(channel, key),
             }
         }
         let sounding = keyview::sounding(self);

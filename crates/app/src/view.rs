@@ -658,6 +658,13 @@ fn screen(app: &mut App, ui: &Ui, l: &L) {
     let (text, color) = match &app.toast {
         Some((t, _)) => (t.clone(), ORANGE),
         None if app.learn.is_some() => ("move a midi control to map it".to_string(), ORANGE),
+        None if app.pad_learn.is_some() => (
+            format!(
+                "hit the midi pad for {:02}. click a pad to pick another. esc to finish",
+                app.pad_learn.unwrap_or(0) + 1
+            ),
+            ORANGE,
+        ),
         None => (hint(app), SCREEN_DIM),
     };
     painter.text(
@@ -1902,7 +1909,11 @@ fn pads(app: &mut App, ui: &Ui, l: &L) {
         let resp = ui.interact(rect, Id::unique(("pad", i)), Sense::click_and_drag());
         let down = resp.is_pointer_button_down_on();
         let step = app.step_page * 16 + i;
-        if app.step_mode {
+        if app.pad_learn.is_some() {
+            if resp.clicked() {
+                app.pad_learn = Some(i);
+            }
+        } else if app.step_mode {
             if resp.clicked() && step < length {
                 app.toggle_step(app.pad, step);
             }
@@ -1946,7 +1957,16 @@ fn pads(app: &mut App, ui: &Ui, l: &L) {
         }
         painter.rect_filled(face_rect, radius, face);
         bevel(painter, face_rect, radius, true);
-        if i == app.pad && !app.step_mode {
+        if app.pad_learn == Some(i) {
+            if (app.now * 4.0).fract() < 0.5 {
+                painter.rect_stroke(
+                    face_rect,
+                    radius,
+                    Stroke::new(l.s(3.0), ORANGE),
+                    StrokeKind::Inside,
+                );
+            }
+        } else if i == app.pad && !app.step_mode && app.pad_learn.is_none() {
             painter.rect_stroke(
                 face_rect,
                 radius,
@@ -2196,6 +2216,9 @@ pub fn setup(app: &mut App, ctx: &egui::Context) {
     let mut pick_midi = None;
     let mut refresh = false;
     let mut forget = false;
+    let mut kind = None;
+    let mut learn_pads = false;
+    let mut clear_pads = false;
     egui::Window::new("SETUP")
         .open(&mut open)
         .resizable(false)
@@ -2258,6 +2281,32 @@ pub fn setup(app: &mut App, ctx: &egui::Context) {
                         }
                     });
                 ui.end_row();
+                if app.midi.port.is_some() {
+                    let current = app.midi_kind();
+                    ui.label("TYPE");
+                    ui.horizontal(|ui| {
+                        for (k, name) in [
+                            (crate::midi::Kind::Keyboard, "KEYBOARD"),
+                            (crate::midi::Kind::Pads, "PADS"),
+                        ] {
+                            if ui.selectable_label(current == k, name).clicked() {
+                                kind = Some(k);
+                            }
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("PADS");
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} notes", app.pad_map_len()));
+                        if ui.button("LEARN PADS").clicked() {
+                            learn_pads = true;
+                        }
+                        if ui.button("CLEAR").clicked() {
+                            clear_pads = true;
+                        }
+                    });
+                    ui.end_row();
+                }
             });
             ui.add_space(8.0);
             ui.label(format!("MIDI MAP: {} controls", app.settings.learned.len()));
@@ -2275,8 +2324,19 @@ pub fn setup(app: &mut App, ctx: &egui::Context) {
             });
             ui.add_space(4.0);
             ui.label("Right-click a knob, then move a MIDI control to map it.");
-            ui.label("Pad notes 36-51 play pads. Other notes play the selected pad.");
+            ui.label("Pad notes 36-51 play pads. Other notes play the keys patch.");
+            ui.label("LEARN PADS: hit each pad of the device in turn. Esc stops.");
+            ui.label("KEYBOARD opens the KEYS screen at the first note. PADS does not.");
         });
+    if let Some(k) = kind {
+        app.set_midi_kind(k);
+    }
+    if learn_pads {
+        app.learn_pads();
+    }
+    if clear_pads {
+        app.clear_pad_map();
+    }
     if let Some(n) = pick_out {
         app.open_output(Some(n));
         app.settings.save();

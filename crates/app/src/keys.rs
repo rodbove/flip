@@ -261,6 +261,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                 app.browser = false;
                 app.setup = false;
                 app.learn = None;
+                if app.pad_learn.is_some() {
+                    app.stop_pad_learn();
+                    app.say("pad map saved");
+                }
             }
             Key::Slash | Key::Questionmark => app.help = !app.help,
             Key::P if modifiers.shift => app.naming = Some(app.current_pad().label()),
