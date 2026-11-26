@@ -173,8 +173,8 @@ pub fn parse(route: &Route, bytes: &[u8]) -> Option<Event> {
         (0x90, [note, vel, ..]) | (0x80, [note, vel, ..]) => {
             let on = status & 0xF0 == 0x90 && *vel > 0;
             let key = *note;
-            if route.learning.load(Ordering::Relaxed) {
-                return on.then_some(Event::Learn { channel, key });
+            if on && route.learning.load(Ordering::Relaxed) {
+                return Some(Event::Learn { channel, key });
             }
             let melodic = melodic(route, channel, *note);
             let (group, pad, note) = map(route, channel, *note);
@@ -492,9 +492,15 @@ mod tests {
         }
 
         #[test]
-        fn ignores_releases() {
-            assert_eq!(parse(&route(), &[0x82, 40, 0]), None);
-            assert_eq!(parse(&route(), &[0x92, 40, 0]), None);
+        fn still_lets_go_of_held_notes() {
+            assert!(matches!(
+                parse(&route(), &[0x82, 40, 0]),
+                Some(Event::Note { on: false, .. })
+            ));
+            assert!(matches!(
+                parse(&route(), &[0x92, 40, 0]),
+                Some(Event::Note { on: false, .. })
+            ));
         }
     }
 

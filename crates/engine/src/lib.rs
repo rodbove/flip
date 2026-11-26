@@ -16,8 +16,8 @@ pub mod sample;
 pub mod store;
 pub mod synth;
 
-pub use engine::{Bounce, Command, Engine, Report, Tap, Trash, bounce};
 pub use bus::{BusFx, BusKind};
+pub use engine::{Bounce, Command, Engine, Report, Tap, Trash, bounce};
 pub use keys::{KEYS, Keys};
 pub use live::{Remote, Runner, Status, Timing, live};
 pub use project::*;

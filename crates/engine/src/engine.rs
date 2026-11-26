@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use rtrb::Consumer;
 
-use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
 use crate::bus::{Bus, BusFx};
+use crate::dsp::{self, Coefs, Env, Rng, Shape, Stage, Svf};
 use crate::fx::Rack;
 use crate::keys::{KEYS, Keys, VIBRATO_HZ};
 use crate::project::{
-    Dirt, Filter, GROUPS, Mix, Mode, PADS, Pad, Pattern, Project, Source, Step, TICKS,
+    Dirt, Filter, GROUPS, Mix, Mode, PADS, PATTERNS, Pad, Pattern, Project, Source, Step, TICKS,
 };
 use crate::punch::Punch;
 use crate::sample::Sample;
@@ -279,7 +279,9 @@ impl Engine {
                 pad,
                 mut data,
             } => {
-                std::mem::swap(&mut self.project.groups[group].pads[pad], &mut data);
+                if group < GROUPS && pad < PADS {
+                    std::mem::swap(&mut self.project.groups[group].pads[pad], &mut data);
+                }
                 self.discard(Trash::Pad(data));
             }
             Command::Pattern {
@@ -287,7 +289,9 @@ impl Engine {
                 index,
                 mut data,
             } => {
-                std::mem::swap(&mut self.project.groups[group].patterns[index], &mut data);
+                if group < GROUPS && index < PATTERNS {
+                    std::mem::swap(&mut self.project.groups[group].patterns[index], &mut data);
+                }
                 self.discard(Trash::Pattern(data));
             }
             Command::Write {
@@ -297,6 +301,9 @@ impl Engine {
                 step,
                 data,
             } => {
+                if group >= GROUPS || index >= PATTERNS || pad >= PADS {
+                    return;
+                }
                 let pattern = &mut self.project.groups[group].patterns[index];
                 if step >= pattern.stride() {
                     return;
@@ -307,6 +314,9 @@ impl Engine {
                 }
             }
             Command::Select { group, pattern } => {
+                if group >= GROUPS || pattern >= PATTERNS {
+                    return;
+                }
                 self.project.groups[group].pattern = pattern;
                 if self.playing && !self.song_active() {
                     self.queued[group] = Some(pattern);
@@ -315,6 +325,9 @@ impl Engine {
                 }
             }
             Command::Song(mut data) => {
+                for p in data.iter_mut().flatten() {
+                    *p = (*p).min(PATTERNS - 1);
+                }
                 std::mem::swap(&mut self.project.song, &mut data);
                 if self.entry >= self.project.song.len() {
                     self.entry = 0;
@@ -338,7 +351,9 @@ impl Engine {
                 self.punch.set(p, step);
             }
             Command::Keys { group, mut data } => {
-                std::mem::swap(&mut self.project.groups[group].keys, &mut data);
+                if group < GROUPS {
+                    std::mem::swap(&mut self.project.groups[group].keys, &mut data);
+                }
                 self.discard(Trash::Keys(data));
             }
             Command::Volume(v) => self.project.volume = v,
@@ -1389,6 +1404,49 @@ mod tests {
                 assert_eq!(e.take_trash(1).count(), 1);
                 assert_eq!(e.take_trash(usize::MAX).count(), 2);
             }
+        }
+    }
+
+    mod when_a_command_names_a_place_that_does_not_exist {
+        use super::*;
+
+        #[test]
+        fn ignores_it_and_returns_the_data_for_cleanup() {
+            let mut e = engine();
+            e.handle(Command::Pad {
+                group: GROUPS,
+                pad: 0,
+                data: Box::new(Pad::default()),
+            });
+            e.handle(Command::Pattern {
+                group: 0,
+                index: PATTERNS,
+                data: Box::new(Pattern::default()),
+            });
+            e.handle(Command::Keys {
+                group: GROUPS,
+                data: Box::new(Keys::default()),
+            });
+            e.handle(Command::Write {
+                group: 0,
+                index: 0,
+                pad: PADS,
+                step: 0,
+                data: Step::default(),
+            });
+            e.handle(Command::Select {
+                group: 0,
+                pattern: PATTERNS,
+            });
+            assert_eq!(e.take_trash(usize::MAX).count(), 3);
+            assert_eq!(e.project.groups[0].pattern, 0);
+        }
+
+        #[test]
+        fn keeps_song_entries_inside_the_patterns() {
+            let mut e = engine();
+            e.handle(Command::Song(Box::new(vec![[PATTERNS + 3, 0, 0, 0]])));
+            assert_eq!(e.project.song[0][0], PATTERNS - 1);
         }
     }
 

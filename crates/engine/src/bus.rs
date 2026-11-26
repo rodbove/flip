@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const DELAY_SECONDS: f32 = 2.5;
+const DELAY_SECONDS: f32 = 3.2;
 const DELAY_GLIDE: f32 = 0.0005;
 const COMBS: [usize; 4] = [1116, 1188, 1277, 1356];
 const ALLPASSES: [usize; 2] = [556, 441];
@@ -76,7 +76,10 @@ impl Comb {
         let out = self.buf[self.i];
         self.store = out * (1.0 - damp) + self.store * damp;
         self.buf[self.i] = x + self.store * feedback;
-        self.i = (self.i + 1) % self.buf.len();
+        self.i += 1;
+        if self.i == self.buf.len() {
+            self.i = 0;
+        }
         out
     }
 }
@@ -97,7 +100,10 @@ impl Allpass {
     fn run(&mut self, x: f32) -> f32 {
         let held = self.buf[self.i];
         self.buf[self.i] = x + held * 0.5;
-        self.i = (self.i + 1) % self.buf.len();
+        self.i += 1;
+        if self.i == self.buf.len() {
+            self.i = 0;
+        }
         held - x
     }
 }
@@ -185,7 +191,10 @@ impl Bus {
         let input = (x[0] + x[1]) * 0.5;
         self.delay[0][self.delay_pos] = input + self.delay_tone[1] * feedback;
         self.delay[1][self.delay_pos] = self.delay_tone[0] * feedback;
-        self.delay_pos = (self.delay_pos + 1) % n;
+        self.delay_pos += 1;
+        if self.delay_pos == n {
+            self.delay_pos = 0;
+        }
         [left, right]
     }
 
@@ -218,7 +227,10 @@ impl Bus {
             let back = (CHORUS_BASE + CHORUS_DEPTH * b * wobble) * self.rate;
             read(&self.chorus[ch], self.chorus_pos, back)
         });
-        self.chorus_pos = (self.chorus_pos + 1) % n;
+        self.chorus_pos += 1;
+        if self.chorus_pos == n {
+            self.chorus_pos = 0;
+        }
         out
     }
 

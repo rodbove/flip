@@ -212,8 +212,9 @@ impl Runner {
         while let Ok(command) = self.commands.pop() {
             match command {
                 Command::Listen { input, rate } => {
-                    if let Some(old) = self.monitor.listen(input, rate, self.rate) {
-                        let _ = self.trash.push(Trash::Input(old));
+                    let old = self.monitor.listen(input, rate, self.rate);
+                    if old.is_some() {
+                        self.engine.handle(Command::Listen { input: old, rate });
                     }
                 }
                 Command::Monitor(gain) => self.monitor.gain = gain.max(0.0),
